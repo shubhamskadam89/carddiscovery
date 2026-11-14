@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carddiscovery"
+version = "0.1.0"
+description = "Discover the credit cards a user owns from their email history."
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+carddiscovery = "carddiscovery.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["carddiscovery*"]
+
+[tool.setuptools.package-data]
+carddiscovery = ["data/*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

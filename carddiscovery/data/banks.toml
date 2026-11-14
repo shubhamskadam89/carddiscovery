@@ -1,0 +1,205 @@
+# Bank sender registry and card product aliases.
+#
+# `domains`: sender domains for this issuer. A sender matches if its domain equals
+#   an entry or is a subdomain of it. Old domains stay here forever, because
+#   historical mail still comes from them.
+#   THESE ARE A STARTING SEED AND HAVE NOT BEEN CHECKED AGAINST REAL MAIL.
+#   Run `carddiscovery senders` on a real inbox to see what each bank actually uses.
+#
+# `products`: canonical product name -> aliases. Matching is case-insensitive,
+#   scoped to the bank, longest alias first, and only counts when the alias sits
+#   next to the word "card" (so "Select" or "Gold" in a sentence does not match).
+#   The canonical name itself is always tried as an alias.
+
+[banks.hdfc]
+name = "HDFC Bank"
+domains = ["hdfcbank.net", "hdfcbank.com", "hdfcbank.bank.in", "hdfcbankcards.com"]
+[banks.hdfc.products]
+"Infinia" = ["Infinia Metal"]
+"Diners Club Black" = ["Diners Black", "DCB Metal"]
+"Diners Club Privilege" = ["Diners Privilege"]
+"Regalia Gold" = []
+"Regalia" = []
+"Millennia" = []
+"MoneyBack+" = ["MoneyBack Plus"]
+"MoneyBack" = []
+"Swiggy" = ["Swiggy HDFC Bank"]
+"Tata Neu Infinity" = []
+"Tata Neu Plus" = []
+"Marriott Bonvoy" = []
+"IndianOil" = ["Indian Oil"]
+"Freedom" = []
+"Pixel Play" = []
+"Pixel Go" = []
+"Shoppers Stop" = []
+
+[banks.icici]
+name = "ICICI Bank"
+domains = ["icicibank.com", "icicibank.bank.in"]
+[banks.icici.products]
+"Amazon Pay" = ["Amazon Pay ICICI"]
+"Emeralde Private Metal" = []
+"Emeralde" = []
+"Sapphiro" = []
+"Rubyx" = []
+"Coral" = []
+"MakeMyTrip" = ["MakeMyTrip ICICI"]
+"HPCL Super Saver" = []
+"Platinum Chip" = []
+"Times Black" = []
+
+[banks.sbi]
+name = "SBI Card"
+domains = ["sbicard.com", "sbicard.bank.in"]
+[banks.sbi.products]
+"Cashback" = ["CASHBACK SBI Card"]
+"SimplyCLICK" = ["Simply Click"]
+"SimplySAVE" = ["Simply Save"]
+"ELITE" = ["SBI Card ELITE"]
+"PRIME" = ["SBI Card PRIME"]
+"Aurum" = []
+"BPCL Octane" = []
+"BPCL" = []
+"IRCTC" = []
+"Air India" = ["Air India SBI"]
+"Pulse" = ["SBI Card PULSE"]
+"Miles" = ["SBI Card MILES"]
+
+[banks.axis]
+name = "Axis Bank"
+domains = ["axisbank.com", "axisbank.co.in", "axisbank.bank.in", "axis.bank.in"]
+[banks.axis.products]
+"Magnus" = ["Magnus Burgundy"]
+"Reserve" = []
+"Atlas" = []
+"ACE" = []
+"Flipkart" = ["Flipkart Axis Bank"]
+"Airtel" = ["Airtel Axis Bank"]
+"Select" = []
+"Privilege" = []
+"MY Zone" = ["MyZone"]
+"Neo" = []
+"Horizon" = []
+"Vistara" = []
+
+[banks.amex]
+name = "American Express"
+domains = ["americanexpress.com", "aexp.com", "americanexpress.co.in"]
+[banks.amex.products]
+"Platinum Travel" = []
+"Platinum Reserve" = []
+"Platinum Charge" = ["Platinum Card"]
+"Gold Charge" = ["Gold Card"]
+"Membership Rewards" = ["MRCC"]
+"SmartEarn" = []
+
+[banks.kotak]
+name = "Kotak Mahindra Bank"
+domains = ["kotak.com", "kotakbank.com", "kotak.bank.in"]
+[banks.kotak.products]
+"White Reserve" = []
+"White" = []
+"League Platinum" = []
+"Myntra" = ["Myntra Kotak"]
+"Zen Signature" = ["Zen"]
+"811" = ["811 Dream Different"]
+
+[banks.idfc]
+name = "IDFC FIRST Bank"
+domains = ["idfcfirstbank.com", "idfcbank.com", "idfcfirst.bank.in"]
+[banks.idfc.products]
+"Ashva" = []
+"Mayura" = []
+"Wealth" = ["FIRST Wealth"]
+"Select" = ["FIRST Select"]
+"Classic" = ["FIRST Classic"]
+"Millennia" = ["FIRST Millennia"]
+"Power+" = ["Power Plus"]
+"WOW" = ["FIRST WOW"]
+
+[banks.indusind]
+name = "IndusInd Bank"
+domains = ["indusind.com", "indusind.bank.in"]
+[banks.indusind.products]
+"Pinnacle" = []
+"Legend" = []
+"Tiger" = []
+"EazyDiner" = []
+"Platinum Aura Edge" = ["Aura Edge"]
+
+[banks.yes]
+name = "YES Bank"
+domains = ["yesbank.in", "yes.bank.in"]
+[banks.yes.products]
+"Marquee" = []
+"Reserv" = []
+"Elite+" = ["ELITE Plus"]
+"Prosperity" = []
+
+[banks.sc]
+name = "Standard Chartered"
+domains = ["sc.com"]
+[banks.sc.products]
+"Ultimate" = []
+"Smart" = []
+"EaseMyTrip" = []
+
+[banks.hsbc]
+name = "HSBC"
+domains = ["hsbc.co.in", "mail.hsbc.co.in"]
+[banks.hsbc.products]
+"Premier" = []
+"Live+" = ["Live Plus"]
+"TravelOne" = []
+"Visa Platinum" = []
+
+[banks.rbl]
+name = "RBL Bank"
+domains = ["rblbank.com"]
+[banks.rbl.products]
+"World Safari" = []
+"ShopRite" = []
+"Platinum Maxima" = []
+"Icon" = []
+
+[banks.au]
+name = "AU Small Finance Bank"
+domains = ["aubank.in", "au.bank.in"]
+[banks.au.products]
+"Zenith+" = ["Zenith Plus"]
+"Zenith" = []
+"Vetta" = []
+"Altura Plus" = []
+"Altura" = []
+"LIT" = []
+
+[banks.federal]
+name = "Federal Bank"
+domains = ["federalbank.co.in", "federal.bank.in"]
+[banks.federal.products]
+"Scapia" = []
+"Celesta" = []
+"Imperio" = []
+
+[banks.bobcard]
+name = "BOBCARD"
+domains = ["bobfinancial.com", "bobcard.co.in"]
+[banks.bobcard.products]
+"Eterna" = []
+"Premier" = []
+"Snapdeal" = []
+
+[banks.onecard]
+name = "OneCard"
+domains = ["getonecard.app", "onecard.app"]
+[banks.onecard.products]
+"OneCard" = []
+
+[banks.citi]
+name = "Citibank (now Axis)"
+domains = ["citi.com", "citibank.co.in", "citibank.com"]
+[banks.citi.products]
+"Prestige" = []
+"PremierMiles" = ["Premier Miles"]
+"Rewards" = []
+"Cashback" = []
