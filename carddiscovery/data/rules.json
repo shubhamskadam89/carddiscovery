@@ -1,0 +1,108 @@
+{
+  "version": "2026.11.15-2",
+  "min_engine": 1,
+  "classify": {
+    "credit_only_banks": [
+      "amex",
+      "bobcard",
+      "onecard",
+      "sbi"
+    ],
+    "otp": "\\botp\\b|one[\\s-]time[\\s-]password|verification code",
+    "offer": "pre[\\s-]?approved|apply now|apply today|apply here|upgrade now|eligible for|you are eligible|you're eligible|limited (period|time)|exclusive offer|instant approval|get (a|your|an)\\b.{0,30}\\bcard|\\bavail\\b|hurry|last chance|\\d+\\s?% off|introducing|invitation|special offer|offer for you|unlock|grab|don't miss|do not miss|apply for|exclusive(ly)? for you|festive|offer valid|\\bearn \\d+\\s?x\\b|\\d+x (reward|points)|\\bupgrade to (the|an?)\\b",
+    "non_credit": "debit card|savings account|\\ba/c\\b|account no|\\bloan\\b|fixed deposit|\\bfd\\b|demat|mutual fund|insurance|\\bupi\\b|net ?banking|current account",
+    "credit_words": "credit card|\\bcc\\b|charge card|card ?member",
+    "boilerplate": "reserve bank of india|\\brbi\\b|ombudsman|grievance|nodal officer|never ask|do not share|don't share|system[- ]generated|do not reply|unsubscribe|registered office|\\bcin\\b|disclaimer|intended recipient|all rights reserved|registered trademark|most important terms|\\bmitc\\b|regret any inconvenience|toll[- ]free|report (it )?immediately|to block your card|sms block|view (this email )?in (your )?browser|stay safe|customer care",
+    "rules": [
+      {
+        "type": "application_rejected",
+        "pattern": "regret to inform|regret that we|unable to approve|unable to process your (application|request)|not (been )?approved|(application|request)\\b.{0,40}\\b(declined|rejected|unsuccessful)"
+      },
+      {
+        "type": "application_received",
+        "pattern": "(application|request)\\b.{0,40}\\b(received|submitted|in progress|under (process|review)|status)|thank(s| you) for (applying|your application)|track your (card )?application|application (no|number|ref)"
+      },
+      {
+        "type": "closure",
+        "pattern": "(card|account)\\b.{0,30}\\b(has been|is|was|have been)\\s+(closed|cancell?ed|terminated)|closure (confirmation|of your|request (processed|completed))|no dues|no objection certificate"
+      },
+      {
+        "type": "upgrade",
+        "pattern": "(has been|successfully|is now)\\s+upgraded|upgrade (is )?(successful|completed|confirmed)|upgraded to|converted to|(has been|successfully|is now)\\s+converted"
+      },
+      {
+        "type": "annual_fee",
+        "pattern": "annual fee|renewal fee|membership fee|joining fee|fee waiver|annual membership"
+      },
+      {
+        "type": "replacement",
+        "pattern": "replacement card|re-?issued?\\b|reissue|card (has been )?replaced"
+      },
+      {
+        "type": "renewal",
+        "pattern": "card renewal|renewed card|renewal card|card (has been|is) renewed"
+      },
+      {
+        "type": "dispatch_activation",
+        "pattern": "dispatch(ed)?\\b|on (its|the) way|\\bdelivered\\b|out for delivery|courier|\\bactivated\\b|activation (is )?(successful|complete)|green pin|pin (has been )?(set|generated|changed)|card is ready|welcome kit"
+      },
+      {
+        "type": "welcome",
+        "pattern": "\\bwelcome\\b"
+      },
+      {
+        "type": "inactivity_notice",
+        "pattern": "\\binactive\\b|not been used|\\bdormant\\b|haven'?t used|have not used|no transactions?\\b.{0,30}\\b(year|months)"
+      },
+      {
+        "type": "statement",
+        "pattern": "\\bstatement\\b|e-?statement"
+      },
+      {
+        "type": "points",
+        "pattern": "reward points?|points\\b.{0,40}\\b(expir\\w*|balance|credited|earned)|cashback (credited|earned)|membership rewards"
+      },
+      {
+        "type": "payment",
+        "pattern": "payment (received|due|reminder|successful|of (rs|inr))|due date|minimum amount due|total amount due|thank you for (the |your )?payment|bill (is )?(generated|due)"
+      },
+      {
+        "type": "transaction_alert",
+        "pattern": "transaction|\\bspent\\b|\\btxn\\b|debited|used (for|at)|purchase|has been charged|charged (rs|inr|₹)|was used"
+      },
+      {
+        "type": "approval",
+        "pattern": "(?<!pre-)(?<!pre )(?<!pre)\\bapproved\\b|congratulations"
+      }
+    ]
+  },
+  "score": {
+    "weights": {
+      "statement": 0.95,
+      "dispatch_activation": 0.95,
+      "welcome": 0.9,
+      "annual_fee": 0.9,
+      "renewal": 0.9,
+      "replacement": 0.9,
+      "upgrade": 0.9,
+      "points": 0.8,
+      "inactivity_notice": 0.85,
+      "closure": 0.85,
+      "transaction_alert": 0.85,
+      "payment": 0.75,
+      "approval": 0.7,
+      "offer_existing_card": 0.5,
+      "unknown": 0.3
+    },
+    "owned_threshold": 0.9,
+    "active_days": 180,
+    "lifecycle_days": 400,
+    "closure_grace_days": 7,
+    "modifiers": {
+      "dkim_fail": 0.3,
+      "forwarded": 0.2,
+      "name_mismatch": 0.2,
+      "not_to_user": 0.3
+    }
+  }
+}

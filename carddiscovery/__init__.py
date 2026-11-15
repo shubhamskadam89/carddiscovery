@@ -1,3 +1,3 @@
 """Credit card discovery from email history."""
 
-EXTRACTOR_VERSION = "2"
+EXTRACTOR_VERSION = "4"

@@ -91,19 +91,24 @@ def plan(
     catch_all_cap: int = 2000,
     chunk: int = 25,
 ) -> list[Query]:
-    """All queries for a full discovery run, highest-value first."""
-    chunks = [tuple(domains[i:i + chunk]) for i in range(0, len(domains), chunk)]
-    out: list[Query] = []
-    for family, words in FAMILIES.items():
-        for c in chunks:
-            out.append(Query(family=family, senders=c, subject_any=words, exclude_subject=("otp",)))
+    """All queries for a full discovery run, highest-value first.
 
-    # Alerts are sampled adaptively: one capped search over the whole history per
-    # sender group. The pipeline splits a window in half only when it comes back
-    # full, so sparse alerts cost one search and dense ones get spread-out samples.
+    `history_years` is how far back the user agreed to scan. It limits every
+    search, so mail older than that is never fetched.
+    """
+    chunks = [tuple(domains[i:i + chunk]) for i in range(0, len(domains), chunk)]
     # Gmail's before: is exclusive, so the range ends tomorrow to include today.
     end = today + timedelta(days=1)
     start = date(today.year - history_years, today.month, 1)
+    out: list[Query] = []
+    for family, words in FAMILIES.items():
+        for c in chunks:
+            out.append(Query(family=family, senders=c, subject_any=words, exclude_subject=("otp",),
+                             after=start))
+
+    # Alerts are sampled adaptively: one capped search over the whole range per
+    # sender group. The pipeline splits a window in half only when it comes back
+    # full, so sparse alerts cost one search and dense ones get spread-out samples.
     for c in chunks:
         out.append(Query(
             family="alerts", senders=c, subject_any=SAMPLED_FAMILY_SUBJECTS,
@@ -114,6 +119,6 @@ def plan(
     for c in chunks:
         out.append(Query(
             family="catch_all", senders=c, text_any=CATCH_ALL_TEXT,
-            exclude_subject=("otp",), max_results=catch_all_cap,
+            exclude_subject=("otp",), after=start, max_results=catch_all_cap,
         ))
     return out

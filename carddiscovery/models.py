@@ -160,10 +160,20 @@ class Card:
     ownership: float = 0.0
     status: Status = Status.UNKNOWN
     status_confidence: float = 0.0
+    decision: str | None = None  # the user's answer: "yes" (mine) or "no" (not mine)
 
     @property
     def key(self) -> str:
         return f"{self.bank_id}:{self.last4 or 'unknown'}:{self.product or 'unknown'}"
+
+    @property
+    def decision_key(self) -> str:
+        """Stable id for remembering the user's answer across runs. A numbered card
+        is its bank + last4 (the product can be corrected later); a card without a
+        number is its bank + product."""
+        if self.last4:
+            return f"{self.bank_id}:{self.last4}"
+        return f"{self.bank_id}:product:{self.product or 'unknown'}"
 
     @property
     def first_seen(self) -> datetime | None:

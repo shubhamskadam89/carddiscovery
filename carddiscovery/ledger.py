@@ -28,6 +28,29 @@ class Ledger:
                 PRIMARY KEY (mailbox, message_id)
             )"""
         )
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS decisions (
+                mailbox TEXT NOT NULL,
+                card_key TEXT NOT NULL,
+                decision TEXT NOT NULL CHECK (decision IN ('yes', 'no')),
+                decided_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (mailbox, card_key)
+            )"""
+        )
+        self.db.commit()
+
+    # ---- the user's Yes/No answers: sticky across runs and cache refreshes
+    def decisions(self, mailbox: str) -> dict[str, str]:
+        rows = self.db.execute("SELECT card_key, decision FROM decisions WHERE mailbox=?", (mailbox,))
+        return dict(rows)
+
+    def decide(self, mailbox: str, card_key: str, decision: str | None) -> None:
+        if decision is None:
+            self.db.execute("DELETE FROM decisions WHERE mailbox=? AND card_key=?", (mailbox, card_key))
+        else:
+            self.db.execute(
+                "INSERT OR REPLACE INTO decisions (mailbox, card_key, decision) VALUES (?, ?, ?)",
+                (mailbox, card_key, decision))
         self.db.commit()
 
     def known(self, mailbox: str) -> dict[str, Evidence]:
@@ -45,10 +68,11 @@ class Ledger:
         )
         self.db.commit()
 
-    def forget(self, mailbox: str | None = None) -> int:
-        if mailbox:
-            cur = self.db.execute("DELETE FROM processed_messages WHERE mailbox=?", (mailbox,))
-        else:
-            cur = self.db.execute("DELETE FROM processed_messages")
+    def forget(self, mailbox: str | None = None, keep_decisions: bool = True) -> int:
+        """Drop cached evidence (e.g. for --fresh). Answers are kept unless asked."""
+        where, args = ("WHERE mailbox=?", (mailbox,)) if mailbox else ("", ())
+        cur = self.db.execute(f"DELETE FROM processed_messages {where}", args)
+        if not keep_decisions:
+            self.db.execute(f"DELETE FROM decisions {where}", args)
         self.db.commit()
         return cur.rowcount

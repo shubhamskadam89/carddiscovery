@@ -13,6 +13,8 @@ from carddiscovery.score import group, score_all
 ME = "shubham.test@gmail.com"
 REG = Registry.load(test_senders=[ME])
 NOW = datetime(2026, 11, 14, tzinfo=timezone.utc)
+# What Gmail adds to mail that really came from a gmail.com account.
+GMAIL_SIGNED = "mx.google.com; dkim=pass header.i=@gmail.com header.s=20230601; spf=pass; dmarc=pass header.from=gmail.com"
 _n = 0
 
 
@@ -20,7 +22,8 @@ def selfmail(subject, body, sender=f"Shubham <{ME}>"):
     global _n
     _n += 1
     return MessageMeta(message_id=f"t{_n}", date=NOW - timedelta(days=1), sender=sender,
-                       subject=subject, snippet=body[:200], body=body, to=ME, auth_results="")
+                       subject=subject, snippet=body[:200], body=body, to=ME,
+                       auth_results=GMAIL_SIGNED)
 
 
 def run(msgs):
@@ -188,3 +191,96 @@ def test_html_parsing_details():
     assert "1234" in body
     assert last4s("Savings A/c XX7788, card XX1111, linked account number XXXXXX4455") == ["1111"]
     assert last4s("Card Member account ending 71005") == ["1005"]
+
+
+# ---------------------------------------------------------------- security
+
+def test_test_sender_still_needs_a_real_signature():
+    m = selfmail("Your HDFC Bank Regalia Gold Credit Card Statement", "statement for card ending 1234")
+    m.auth_results = ""  # e.g. forged From with no Gmail signature result
+    cards, _, ev = run([m])
+    assert not ev[0].dkim_pass and group(cards[0]) == "review"
+
+
+def test_test_mode_is_locked_without_dev_flag(monkeypatch):
+    import pytest
+    from carddiscovery.registry import TestModeLocked
+    monkeypatch.delenv("CARDDISCOVERY_DEV", raising=False)
+    with pytest.raises(TestModeLocked):
+        Registry.load(test_senders=[ME])
+
+
+def test_only_gmails_own_auth_header_is_trusted():
+    from carddiscovery.providers.gmail import trusted_auth_results
+    forged = "attacker.example; dkim=pass header.d=hdfcbank.net"
+    real = "mx.google.com; dkim=fail header.d=evil.example; dmarc=fail"
+    assert trusted_auth_results([real, forged]) == real
+    assert trusted_auth_results([forged]) == ""
+
+
+def test_forged_auth_header_cannot_make_bank_mail_trusted():
+    from carddiscovery.classify import dkim_pass
+    from carddiscovery.providers.gmail import _to_meta
+    raw = {"id": "f1", "internalDate": "1700000000000", "snippet": "card ending 1234", "payload": {"headers": [
+        {"name": "Authentication-Results", "value": "mx.google.com; dkim=fail header.d=evil.example"},
+        {"name": "Authentication-Results", "value": "evil.example; dkim=pass header.d=hdfcbank.net"},
+        {"name": "From", "value": "HDFC Bank <alerts@hdfcbank.net>"},
+        {"name": "Subject", "value": "Your HDFC Bank Credit Card Statement"},
+    ]}}
+    m = _to_meta(raw)
+    assert not dkim_pass(m, "hdfc", Registry.load())
+
+
+def test_recipient_match_is_whole_address():
+    from carddiscovery.classify import addressed_to_user
+    m = selfmail("x card", "card")
+    m.to = "Someone <aashubham.test@gmail.com>"
+    assert not addressed_to_user(m, [ME])
+    m.to = f"Shubham <{ME}>, other@example.com"
+    assert addressed_to_user(m, [ME])
+
+
+# ---------------------------------------------------------------- explanations and answers
+
+def _kit_cards():
+    return run([selfmail(s, b) for s, b in _kit()])[0]
+
+
+def test_explanations_are_plain_sentences():
+    from carddiscovery.explain import explain
+    cards = {c.last4: c for c in _kit_cards()}
+    e = explain(cards["6666"], REG)
+    assert e.title == "HDFC Bank Regalia ••6666" and e.status == "Replaced"
+    assert "••7777" in e.headline and "upgrade" in e.headline
+    e = explain(cards["9191"], REG)
+    assert e.question == "Is this your card?"
+    assert any("someone else" in c for c in e.concerns)
+    e = explain(cards["8888"], REG)
+    assert e.status == "Closed" and "Jan 2022" in e.headline
+
+
+def test_answers_override_grouping_and_persist(tmp_path):
+    from carddiscovery.ledger import Ledger
+    led = Ledger(tmp_path / "l.db")
+    cards = {c.last4: c for c in _kit_cards()}
+    led.decide(ME, cards["9191"].decision_key, "yes")
+    led.decide(ME, cards["1111"].decision_key, "no")
+    answers = Ledger(tmp_path / "l.db").decisions(ME)  # survives reopening
+    for c in cards.values():
+        c.decision = answers.get(c.decision_key)
+    assert group(cards["9191"]) == "owned" and group(cards["1111"]) == "rejected"
+    led.forget(ME)  # clearing the cache keeps answers
+    assert led.decisions(ME)
+
+
+def test_professional_emails_match_expectations():
+    from tests.pro_emails import PRO
+    _check_html_kit(PRO)
+
+
+def test_script_content_is_never_read():
+    from carddiscovery.providers.gmail import _extract_body
+    from tests.pro_emails import PRO, TRAP
+    for e in PRO:
+        body, _ = _extract_body(_gmail_payload(e["html"]))
+        assert TRAP not in body and "track()" not in body

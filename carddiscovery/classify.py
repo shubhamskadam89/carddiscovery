@@ -9,81 +9,44 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from email.utils import getaddresses
 
 from . import extract
 from .models import Evidence, EvidenceType as T, MessageMeta
-from .registry import TEST_BANK_ID, Registry
+from .registry import TEST_BANK_ID, Registry, sender_domain
 
 _DATE_TAG = re.compile(r"\[date:\s*(\d{4})-(\d{2})-(\d{2})\]", re.IGNORECASE)
-
-# Issuers that only issue credit/charge cards, so "debit"/"account" words don't
-# mean the email is about something else.
-CREDIT_ONLY_BANKS = {"sbi", "amex", "onecard", "bobcard"}
-
 
 def _r(p: str) -> re.Pattern:
     return re.compile(p, re.IGNORECASE)
 
 
-OTP = _r(r"\botp\b|one[\s-]time[\s-]password|verification code")
-OFFER = _r(
-    r"pre[\s-]?approved|apply now|apply today|apply here|upgrade now|eligible for|you are eligible|"
-    r"you're eligible|limited (period|time)|exclusive offer|instant approval|get (a|your|an)\b.{0,30}\bcard|"
-    r"\bavail\b|hurry|last chance|\d+\s?% off|introducing|invitation|special offer|offer for you|"
-    r"unlock|grab|don't miss|do not miss|apply for|exclusive(ly)? for you|festive|offer valid|"
-    r"\bearn \d+\s?x\b|\d+x (reward|points)"
-)
-NON_CREDIT = _r(r"debit card|savings account|\ba/c\b|account no|\bloan\b|fixed deposit|\bfd\b|demat|"
-                r"mutual fund|insurance|\bupi\b|net ?banking|current account")
-CREDIT_WORDS = _r(r"credit card|\bcc\b|charge card|card ?member")  # "card ending" also appears in debit mail
-
-RULES: list[tuple[T, re.Pattern]] = [
-    (T.APPLICATION_REJECTED, _r(
-        r"regret to inform|regret that we|unable to approve|unable to process your (application|request)|"
-        r"not (been )?approved|"
-        r"(application|request)\b.{0,40}\b(declined|rejected|unsuccessful)")),
-    (T.APPLICATION_RECEIVED, _r(
-        r"(application|request)\b.{0,40}\b(received|submitted|in progress|under (process|review)|status)|"
-        r"thank(s| you) for (applying|your application)|track your (card )?application|application (no|number|ref)")),
-    (T.CLOSURE, _r(
-        r"(card|account)\b.{0,30}\b(has been|is|was|have been)\s+(closed|cancell?ed|terminated)|"
-        r"closure (confirmation|of your|request (processed|completed))|no dues|no objection certificate")),
-    (T.UPGRADE, _r(
-        r"(has been|successfully|is now)\s+upgraded|upgrade (is )?(successful|completed|confirmed)|"
-        r"upgraded to|converted to|(has been|successfully|is now)\s+converted")),
-    (T.ANNUAL_FEE, _r(r"annual fee|renewal fee|membership fee|joining fee|fee waiver|annual membership")),
-    (T.REPLACEMENT, _r(r"replacement card|re-?issued?\b|reissue|card (has been )?replaced")),
-    (T.RENEWAL, _r(r"card renewal|renewed card|renewal card|card (has been|is) renewed")),
-    (T.DISPATCH_ACTIVATION, _r(
-        r"dispatch(ed)?\b|on (its|the) way|\bdelivered\b|out for delivery|courier|\bactivated\b|"
-        r"activation (is )?(successful|complete)|green pin|pin (has been )?(set|generated|changed)|"
-        r"card is ready|welcome kit")),
-    (T.WELCOME, _r(r"\bwelcome\b")),
-    (T.INACTIVITY_NOTICE, _r(
-        r"\binactive\b|not been used|\bdormant\b|haven'?t used|have not used|"
-        r"no transactions?\b.{0,30}\b(year|months)")),
-    (T.STATEMENT, _r(r"\bstatement\b|e-?statement")),
-    (T.POINTS, _r(r"reward points?|points\b.{0,40}\b(expir\w*|balance|credited|earned)|"
-                  r"cashback (credited|earned)|membership rewards")),
-    (T.PAYMENT, _r(r"payment (received|due|reminder|successful|of (rs|inr))|due date|minimum amount due|"
-                   r"total amount due|thank you for (the |your )?payment|bill (is )?(generated|due)")),
-    (T.TRANSACTION_ALERT, _r(
-        r"transaction|\bspent\b|\btxn\b|debited|used (for|at)|purchase|has been charged|"
-        r"charged (rs|inr|₹)|was used")),
-    (T.APPROVAL, _r(r"(?<!pre-)(?<!pre )(?<!pre)\bapproved\b|congratulations")),
-]
+# Patterns and rules come from the rules bundle (data/rules.json, or a signed
+# bundle passed with --bundle). configure() compiles them into these globals.
+CREDIT_ONLY_BANKS: set[str] = set()  # issue only credit/charge cards: "account" words don't disqualify
+OTP: re.Pattern
+OFFER: re.Pattern
+NON_CREDIT: re.Pattern
+CREDIT_WORDS: re.Pattern  # "card ending" is not here: it also appears in debit mail
+# Lines every bank email carries (security tips, RBI notices, grievance contacts,
+# legal footers). They mention "closed", "not been used", "regret", "OTP" and
+# other card products, so rules must not read them.
+BOILERPLATE: re.Pattern
+RULES: list[tuple[T, re.Pattern]] = []
 
 
-# Lines every bank email carries: security tips, RBI notices, grievance contacts,
-# legal footers. They mention "closed", "not been used", "regret", "OTP" and other
-# card products, so rules must not read them.
-BOILERPLATE = _r(
-    r"reserve bank of india|\brbi\b|ombudsman|grievance|nodal officer|never ask|do not share|"
-    r"don't share|system[- ]generated|do not reply|unsubscribe|registered office|\bcin\b|disclaimer|"
-    r"intended recipient|all rights reserved|registered trademark|most important terms|\bmitc\b|"
-    r"regret any inconvenience|toll[- ]free|report (it )?immediately|to block your card|sms block|"
-    r"view (this email )?in (your )?browser|stay safe|customer care"
-)
+def configure(cfg: dict) -> None:
+    """Load classification rules from a bundle's "classify" section."""
+    global CREDIT_ONLY_BANKS, OTP, OFFER, NON_CREDIT, CREDIT_WORDS, BOILERPLATE, RULES
+    CREDIT_ONLY_BANKS = set(cfg["credit_only_banks"])
+    OTP = _r(cfg["otp"])
+    OFFER = _r(cfg["offer"])
+    NON_CREDIT = _r(cfg["non_credit"])
+    CREDIT_WORDS = _r(cfg["credit_words"])
+    BOILERPLATE = _r(cfg["boilerplate"])
+    RULES = [(T(r["type"]), _r(r["pattern"])) for r in cfg["rules"]]
+
+
 
 
 def _units(text: str) -> list[str]:
@@ -151,10 +114,25 @@ _FWD_BODY = re.compile(r"-{3,}\s*forwarded message\s*-{3,}|begin forwarded messa
 
 
 def dkim_pass(msg: MessageMeta, bank_id: str | None, registry: Registry) -> bool:
+    """`msg.auth_results` holds only the result Gmail itself added (see
+    providers.gmail.trusted_auth_results), so a pass here can't be forged."""
     if not bank_id:
         return False
     for dkim_d, dmarc_d in _DKIM.findall(msg.auth_results or ""):
         if registry.bank_for_domain(dkim_d or dmarc_d) == bank_id:
+            return True
+    return False
+
+
+def sender_signed(msg: MessageMeta) -> bool:
+    """Gmail's own result says the From address's domain really signed this email.
+    Used in test mode, where the 'bank' is a personal address."""
+    domain = sender_domain(msg.sender)
+    if not domain:
+        return False
+    for dkim_d, dmarc_d in _DKIM.findall(msg.auth_results or ""):
+        d = (dkim_d or dmarc_d).lower().lstrip("@")
+        if d == domain or domain.endswith("." + d):
             return True
     return False
 
@@ -164,10 +142,11 @@ def is_forwarded(msg: MessageMeta) -> bool:
 
 
 def addressed_to_user(msg: MessageMeta, user_addresses: list[str]) -> bool:
+    """Whole-address match, so "a@x.com" doesn't match "aa@x.com"."""
     if not msg.to or not user_addresses:
         return True  # unknown: don't penalise
-    to = msg.to.lower()
-    return any(a.lower() in to for a in user_addresses)
+    recipients = {addr.lower() for _, addr in getaddresses([msg.to]) if addr}
+    return bool(recipients & {a.lower() for a in user_addresses})
 
 
 # ---------------------------------------------------------------- analysis
@@ -188,9 +167,9 @@ def analyze(
 
     test = registry.is_test_sender(msg.sender)
     if test:
-        # Test mode: the bank is whichever one the email names, the sender is
-        # trusted (self-sent mail carries no DKIM result), and a [date:YYYY-MM-DD]
-        # tag lets a test email pretend to be years old.
+        # Test mode (dev builds only, see registry.dev_mode): the bank is whichever
+        # one the email names, the signature must still pass for the test sender's
+        # own domain, and a [date:YYYY-MM-DD] tag lets a test email look years old.
         # Ordinary personal mail from the same address must not turn into cards.
         if not re.search(r"\bcard\b", text, re.IGNORECASE):
             # Preview text may be junk ("View in browser..."): ask for the body once.
@@ -217,7 +196,7 @@ def analyze(
         products=products,
         product=best,
         product_raw=None if products else _clean_raw_product(extract.product_raw(text), registry),
-        dkim_pass=True if test else dkim_pass(msg, bank_id, registry),
+        dkim_pass=sender_signed(msg) if test else dkim_pass(msg, bank_id, registry),
         forwarded=is_forwarded(msg),
         to_user=addressed_to_user(msg, user_addresses or []),
         name_match=extract.name_matches(extract.holder_name(text), user_names or []),
@@ -282,3 +261,11 @@ def needs_body(ev: Evidence) -> bool:
     if ev.type in (T.TRANSACTION_ALERT, T.PAYMENT, T.POINTS):
         return not ev.last4s  # these rarely name the product; the number is what matters
     return not ev.last4s or not ev.products
+
+
+def _configure_default() -> None:
+    from .rules import source_bundle
+    configure(source_bundle()["classify"])
+
+
+_configure_default()

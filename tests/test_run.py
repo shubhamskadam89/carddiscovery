@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from email.utils import parseaddr
 
 from carddiscovery.ledger import Ledger
 from carddiscovery.models import MessageMeta
@@ -29,7 +30,8 @@ class FakeGmail:
         out = []
         for m in sorted(self.msgs.values(), key=lambda m: m.date, reverse=True):
             dom = sender_domain(m.sender) or ""
-            if not any(dom == s or dom.endswith("." + s) for s in q.senders):
+            addr = parseaddr(m.sender)[1].lower()
+            if not any(s == addr or dom == s or dom.endswith("." + s) for s in q.senders):
                 continue
             d = m.date.date()
             if q.after and d < q.after or q.before and d >= q.before:  # Gmail: before: is exclusive
@@ -94,3 +96,14 @@ def test_second_run_uses_cache(tmp_path):
     discover(box, Registry.load(), ledger)
     res = discover(box, Registry.load(), ledger)
     assert res.stats.metadata_fetched == 0 and len(res.cards) == 1
+
+
+def test_scan_depth_limits_every_search(tmp_path):
+    now = datetime.now(timezone.utc)
+    box = FakeGmail([
+        msg(1, "Your ICICI Bank Coral Credit Card Statement", "card ending 1111", now - timedelta(days=30)),
+        msg(2, "Your ICICI Bank Coral Credit Card Statement", "card ending 2222", now - timedelta(days=365 * 4)),
+    ])
+    res = discover(box, Registry.load(), Ledger(tmp_path / "l.db"), history_years=2)
+    assert [c.last4 for c in res.cards] == ["1111"]
+    assert all(q.after is not None for q in box.searches)

@@ -218,27 +218,71 @@ class GmailProvider:
                 raise
 
 
+TRUSTED_AUTHSERV = "mx.google.com"
+
+
+def trusted_auth_results(values: list[str]) -> str:
+    """The signature result Gmail itself added, and nothing else.
+
+    Any sender can put their own "Authentication-Results: ... dkim=pass
+    header.d=hdfcbank.net" header into an email. Gmail adds its own result
+    above everything else on delivery, so trust only the first header whose
+    authserv-id (the part before the first ";") is mx.google.com. ARC headers
+    are ignored: they can be forged too unless the whole chain is verified.
+    """
+    for v in values:  # Gmail API returns headers top first
+        authserv = v.split(";", 1)[0].strip().lower()
+        if authserv == TRUSTED_AUTHSERV:
+            return v
+    return ""
+
+
 def _to_meta(raw: dict) -> MessageMeta:
-    headers = {}
+    headers: dict[str, list[str]] = {}
     for h in raw.get("payload", {}).get("headers", []):
-        name = h["name"].lower()
-        # Several Authentication-Results headers can exist; keep them all.
-        headers[name] = (headers.get(name, "") + "\n" + h["value"]).strip()
+        headers.setdefault(h["name"].lower(), []).append(h["value"])
+
+    def one(name: str) -> str:
+        return headers.get(name, [""])[0]
+
     date = datetime.fromtimestamp(int(raw.get("internalDate", "0")) / 1000, tz=timezone.utc)
     return MessageMeta(
         message_id=raw["id"],
         date=date,
-        sender=headers.get("from", ""),
-        subject=headers.get("subject", ""),
+        sender=one("from"),
+        subject=one("subject"),
         snippet=raw.get("snippet", ""),
-        to=" ".join(filter(None, [headers.get("to", ""), headers.get("delivered-to", "")])),
-        auth_results="\n".join(filter(None, [
-            headers.get("authentication-results", ""),
-            headers.get("arc-authentication-results", ""),
-        ])),
+        to=", ".join(filter(None, [one("to"), one("delivered-to")])),
+        auth_results=trusted_auth_results(headers.get("authentication-results", [])),
         list_unsubscribe="list-unsubscribe" in headers,
         labels=tuple(raw.get("labelIds", [])),
     )
+
+
+def revoke(token_file: Path | None = None) -> bool:
+    """Tell Google to revoke the grant, so the app loses access, not just the file."""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    token_file = token_file or STATE_DIR / "token.json"
+    if not token_file.exists():
+        return False
+    data = json.loads(token_file.read_text())
+    token = data.get("refresh_token") or data.get("token")
+    if not token:
+        return False
+    req = urllib.request.Request(
+        "https://oauth2.googleapis.com/revoke",
+        data=urllib.parse.urlencode({"token": token}).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 # Tags that separate words. Inline tags (span, b, a, font) don't, so

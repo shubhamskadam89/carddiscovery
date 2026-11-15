@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "google-api-python-client>=2.100",
     "google-auth-oauthlib>=1.2",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +23,7 @@ carddiscovery = "carddiscovery.cli:main"
 include = ["carddiscovery*"]
 
 [tool.setuptools.package-data]
-carddiscovery = ["data/*.toml"]
+carddiscovery = ["data/*.toml", "data/*.json", "data/*.html", "data/*.pem"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

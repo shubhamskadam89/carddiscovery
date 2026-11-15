@@ -35,6 +35,18 @@ def _alias_pattern(alias: str) -> re.Pattern:
 TEST_BANK_ID = "testbank"
 
 
+def dev_mode() -> bool:
+    """Test senders are a development tool: they make mail from a personal address
+    count as bank mail. They only work with CARDDISCOVERY_DEV=1 set, so a normal
+    run (or a shipped build) can never be fed fake bank mail this way."""
+    import os
+    return os.environ.get("CARDDISCOVERY_DEV") == "1"
+
+
+class TestModeLocked(RuntimeError):
+    pass
+
+
 class Registry:
     def __init__(self, banks: dict[str, Bank], test_senders: list[str] | None = None):
         self.banks = banks
@@ -44,6 +56,8 @@ class Registry:
         )
         # Test mode: personal addresses that stand in for banks. The bank is then
         # read from the email text ("HDFC Bank ...") instead of the sender domain.
+        if test_senders and not dev_mode():
+            raise TestModeLocked("--test-sender needs CARDDISCOVERY_DEV=1 (development only)")
         self.test_senders = [s.lower().strip() for s in (test_senders or [])]
         if self.test_senders and TEST_BANK_ID not in banks:
             banks[TEST_BANK_ID] = Bank(id=TEST_BANK_ID, name="Test Bank (bank not named)", domains=[])
@@ -58,9 +72,15 @@ class Registry:
         else:
             raw = Path(path).read_bytes()
         data = tomllib.loads(raw.decode())
+        return cls.from_banks(data["banks"], catalog_csv=catalog_csv, test_senders=test_senders)
+
+    @classmethod
+    def from_banks(cls, banks_cfg: dict, catalog_csv: Path | None = None,
+                   test_senders: list[str] | None = None) -> "Registry":
+        """Build from the "banks" section of a rules bundle (same shape as banks.toml)."""
         aliases: dict[str, dict[str, list[str]]] = {}
         banks: dict[str, Bank] = {}
-        for bank_id, cfg in data["banks"].items():
+        for bank_id, cfg in banks_cfg.items():
             banks[bank_id] = Bank(id=bank_id, name=cfg["name"], domains=list(cfg["domains"]))
             aliases[bank_id] = {p: list(a) for p, a in cfg.get("products", {}).items()}
         if catalog_csv:

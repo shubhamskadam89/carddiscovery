@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .ledger import Ledger
 from .models import Card
-from .registry import Registry, sender_domain
+from .registry import Registry, TestModeLocked, sender_domain
+from .rules import BundleError
 from .score import group
 
 DEFAULT_CREDENTIALS = Path("credentials.json")
@@ -30,6 +31,41 @@ def _state_dir() -> Path:
 def _provider(args):
     from .providers.gmail import GmailProvider, authorize
     return GmailProvider(authorize(Path(args.credentials)))
+
+
+def mask_text(text: str) -> str:
+    """Hide numbers before printing email text to a terminal (which may be logged)."""
+    import re
+    return re.sub(r"\d", "#", text)
+
+
+def _registry(args) -> Registry:
+    """Bank list and rules: from a signed bundle if --bundle is given (verified,
+    refused if tampered), otherwise from the source files in data/."""
+    from . import rules
+    catalog = Path(args.catalog) if getattr(args, "catalog", None) else None
+    test_senders = getattr(args, "test_sender", None) or []
+    if getattr(args, "bundle", None):
+        bundle = rules.load_bundle(Path(args.bundle))
+        rules.activate(bundle)
+        print(f"Rules bundle {bundle.get('version')} (signature verified)", file=sys.stderr)
+        return Registry.from_banks(bundle["banks"], catalog_csv=catalog, test_senders=test_senders)
+    return Registry.load(catalog_csv=catalog, test_senders=test_senders)
+
+
+def cmd_bundle(args) -> int:
+    from . import rules
+    if args.action == "keygen":
+        pub = rules.keygen()
+        print(f"Signing key: {rules.DEFAULT_KEY} (keep it private)\nPublic key:  {pub} (ships with the app)")
+    elif args.action == "build":
+        b, sig = rules.build(Path(args.out))
+        print(f"Wrote {b} and {sig}")
+    elif args.action == "verify":
+        bundle = rules.load_bundle(Path(args.path))
+        print(f"OK: bundle {bundle.get('version')}, {len(bundle['banks'])} banks, "
+              f"{len(bundle['classify']['rules'])} rules")
+    return 0
 
 
 def cmd_auth(args) -> int:
@@ -59,8 +95,7 @@ def _card_row(c: Card, registry: Registry) -> str:
 def cmd_discover(args) -> int:
     from .pipeline import discover
 
-    registry = Registry.load(catalog_csv=Path(args.catalog) if args.catalog else None,
-                             test_senders=args.test_sender)
+    registry = _registry(args)
     provider = _provider(args)
     ledger = Ledger(_state_dir() / "ledger.db")
     if args.test_sender:
@@ -82,15 +117,30 @@ def cmd_discover(args) -> int:
         collect_unknown=args.show_unknown,
     )
 
-    groups: dict[str, list[Card]] = {"owned": [], "review": [], "history": []}
+    from .explain import explain
+
+    groups: dict[str, list[Card]] = {"owned": [], "review": [], "history": [], "rejected": []}
     for c in res.cards:
         groups[group(c)].append(c)
-    titles = {"owned": "YOUR CARDS", "review": "PLEASE CONFIRM", "history": "HISTORY (closed / replaced)"}
+    titles = {"owned": "YOUR CARDS", "review": "PLEASE CONFIRM", "history": "OLD CARDS (closed / replaced)",
+              "rejected": "NOT YOURS (your answer)"}
     print(f"\nMailbox: {res.mailbox}")
-    for g in ("owned", "review", "history"):
+    for g in ("owned", "review", "history", "rejected"):
+        if g == "rejected" and not groups[g]:
+            continue
         print(f"\n{titles[g]} ({len(groups[g])})")
         for c in sorted(groups[g], key=lambda c: (c.bank_id, c.last4 or "")):
-            print(_card_row(c, registry))
+            if args.details:
+                print(_card_row(c, registry))
+                continue
+            e = explain(c, registry)
+            print(f"  • {e.title}  [{e.status}]")
+            print(f"      {e.headline}")
+            print(f"      Seen in: {'; '.join(e.evidence)}")
+            for concern in e.concerns:
+                print(f"      ⚠ {concern}")
+            if e.question:
+                print(f"      {e.question}  →  carddiscovery decide {c.decision_key} yes|no")
     if res.applications:
         print(f"\nAPPLICATIONS (not counted as cards) ({len(res.applications)})")
         for a in res.applications:
@@ -113,7 +163,7 @@ def cmd_discover(args) -> int:
     if args.show_unknown and res.unknown_subjects:
         print(f"\nUNCLASSIFIED BANK EMAILS ({len(res.unknown_subjects)}) — subjects shown here only, not saved")
         for bank, subj in Counter(res.unknown_subjects).most_common(40):
-            print(f"  {bank:<10} {subj[:100]}")
+            print(f"  {bank:<10} {mask_text(subj)[:100]}")
 
     if args.json:
         out = {
@@ -127,6 +177,8 @@ def cmd_discover(args) -> int:
                     "last_seen": c.last_seen.isoformat() if c.last_seen else None,
                     "replaced_by": c.replaced_by.last4 if c.replaced_by else None,
                     "flags": sorted(c.flags),
+                    "decision": c.decision,
+                    "explanation": vars(explain(c, registry)),
                     "evidence": [e.to_dict() for e in c.evidence],
                 }
                 for c in res.cards
@@ -165,8 +217,31 @@ def cmd_senders(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    from .web import App, serve
+    app = App(_registry(args), Path(args.credentials), _state_dir(), args.name or [], args.test_sender or [])
+    serve(app, port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
+def cmd_decide(args) -> int:
+    """Record the user's answer for a card: yes (mine), no (not mine), or clear."""
+    provider = _provider(args)  # the mailbox the answer belongs to comes from the sign-in
+    ledger = Ledger(_state_dir() / "ledger.db")
+    ledger.decide(provider.mailbox(), args.card, None if args.answer == "clear" else args.answer)
+    print(f"Saved: {args.card} → {args.answer}")
+    return 0
+
+
 def cmd_forget(args) -> int:
+    from .providers.gmail import revoke
+
     state = _state_dir()
+    if revoke(state / "token.json"):
+        print("Google access revoked.")
+    else:
+        print("Could not revoke with Google (no token, or offline). Revoke manually at "
+              "https://myaccount.google.com/permissions")
     removed = []
     for f in ("token.json", "ledger.db"):
         p = state / f
@@ -174,7 +249,6 @@ def cmd_forget(args) -> int:
             p.unlink()
             removed.append(str(p))
     print("Deleted: " + (", ".join(removed) if removed else "nothing"))
-    print("Also revoke access at https://myaccount.google.com/permissions if you want Google to forget the grant.")
     return 0
 
 
@@ -188,10 +262,13 @@ def main(argv: list[str] | None = None) -> int:
 
     d = sub.add_parser("discover", help="find the cards in this mailbox")
     d.add_argument("--name", action="append", help="your name as banks write it (repeatable)")
-    d.add_argument("--years", type=int, default=15, help="how far back to sample alerts (default 15)")
+    d.add_argument("--years", type=int, default=5, choices=range(1, 16), metavar="1-15",
+                   help="how far back to scan, in years (default 5). Older mail is never fetched")
     d.add_argument("--max-bodies", type=int, default=400, help="cap on full-email fetches (default 400)")
     d.add_argument("--alerts-per-window", type=int, default=40, help="alerts sampled per 6-month window")
     d.add_argument("--catalog", help="CSV with bank_id,product,aliases to extend product matching")
+    d.add_argument("--bundle", help="signed rules bundle (bundle.json, with bundle.sig next to it)")
+    d.add_argument("--details", action="store_true", help="show scores and evidence counts instead of sentences")
     d.add_argument("--json", help="also write results to this JSON file")
     d.add_argument("--show-unknown", action="store_true",
                    help="print subjects of bank emails the rules could not classify")
@@ -205,11 +282,40 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--limit", type=int, default=500)
     s.set_defaults(fn=cmd_senders)
 
-    sub.add_parser("forget", help="delete local token and cached results").set_defaults(fn=cmd_forget)
+    sub.add_parser("forget", help="revoke Google access and delete local token and cache").set_defaults(fn=cmd_forget)
+
+    sv = sub.add_parser("serve", help="local web page that mimics the mobile flow")
+    sv.add_argument("--port", type=int, default=0, help="port (default: any free port)")
+    sv.add_argument("--no-browser", action="store_true", help="don't open the browser")
+    sv.add_argument("--name", action="append", help="your name as banks write it (repeatable)")
+    sv.add_argument("--test-sender", action="append", default=[], metavar="ADDRESS",
+                    help="dev only (CARDDISCOVERY_DEV=1): treat mail from this address as bank mail")
+    sv.add_argument("--bundle", help="signed rules bundle")
+    sv.add_argument("--catalog", help="CSV with bank_id,product,aliases")
+    sv.set_defaults(fn=cmd_serve)
+
+    dc = sub.add_parser("decide", help="answer 'is this your card?' for a card")
+    dc.add_argument("card", help="card id shown by discover, e.g. icici:9191")
+    dc.add_argument("answer", choices=["yes", "no", "clear"])
+    dc.set_defaults(fn=cmd_decide)
+
+    b = sub.add_parser("bundle", help="build, sign and verify the rules bundle")
+    b.add_argument("action", choices=["keygen", "build", "verify"])
+    b.add_argument("--out", default="dist", help="output folder for build (default dist/)")
+    b.add_argument("--path", default="dist/bundle.json", help="bundle to verify")
+    b.set_defaults(fn=cmd_bundle)
 
     args = ap.parse_args(argv)
     try:
         return args.fn(args)
+    except BundleError as e:
+        print(f"Rules bundle error: {e}", file=sys.stderr)
+        return 2
+    except TestModeLocked as e:
+        print(f"{e}. Test senders make personal mail count as bank mail, so they are "
+              "for development only:\n  CARDDISCOVERY_DEV=1 carddiscovery discover --test-sender ...",
+              file=sys.stderr)
+        return 2
     except Exception as e:  # turn common Google setup errors into one readable line
         msg = _google_setup_hint(e)
         if msg is None:

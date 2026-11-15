@@ -135,5 +135,8 @@ def discover(
             stats.dkim_pass += ev.dkim_pass
     cards, apps = resolve(all_ev)
     score_all(cards, datetime.now(timezone.utc))
+    answers = ledger.decisions(mailbox)
+    for c in cards:
+        c.decision = answers.get(c.decision_key)
     stats.seconds = round(time.monotonic() - t0, 1)
     return RunResult(mailbox, cards, apps, stats, unknown_subjects)

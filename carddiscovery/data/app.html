@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card Discovery</title>
+<style>
+:root {
+  --bg: #eef0f3; --phone: #ffffff; --ink: #14171c; --muted: #5c6470; --line: #e3e6ea;
+  --accent: #1a56db; --accent-ink: #ffffff; --soft: #f4f6f9;
+  --ok: #0f7b4f; --ok-bg: #e6f5ee; --warn: #9a5b00; --warn-bg: #fff4e0; --bad: #b42318; --bad-bg: #fdecea;
+  --chip: #eef2ff; --chip-ink: #2a3a8c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c0e11; --phone: #16191e; --ink: #e8eaed; --muted: #9aa3ad; --line: #2a2f36;
+    --accent: #6b9cff; --accent-ink: #0c0e11; --soft: #1d2127;
+    --ok: #5fd3a0; --ok-bg: #12291f; --warn: #f2b45a; --warn-bg: #2b2110; --bad: #ff8a80; --bad-bg: #2d1514;
+    --chip: #1f2a4d; --chip-ink: #b9c8ff;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.phone { max-width: 420px; min-height: 100vh; margin: 0 auto; background: var(--phone);
+  padding: 20px 16px 40px; }
+@media (min-width: 500px) { .phone { margin: 24px auto; min-height: 0; border-radius: 28px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.12); padding: 28px 22px 32px; } }
+h1 { font-size: 24px; line-height: 1.2; margin: 6px 0 8px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 8px; }
+p { margin: 8px 0; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.screen { display: none; } .screen.on { display: block; }
+.btn { display: block; width: 100%; padding: 13px 16px; border-radius: 12px; border: 0; font: inherit;
+  font-weight: 600; cursor: pointer; margin-top: 10px; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.ghost { background: var(--soft); color: var(--ink); }
+.btn.danger { background: var(--bad-bg); color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: default; }
+.list { margin: 8px 0; padding: 0; list-style: none; }
+.list li { padding: 8px 0 8px 28px; position: relative; }
+.list li::before { content: "✓"; position: absolute; left: 4px; color: var(--ok); font-weight: 700; }
+.list.x li::before { content: "✕"; color: var(--bad); }
+.box { background: var(--soft); border-radius: 14px; padding: 12px 14px; margin: 12px 0; }
+details summary { cursor: pointer; font-weight: 600; }
+.banks { columns: 2; font-size: 13px; color: var(--muted); margin-top: 8px; }
+.seg { display: flex; gap: 6px; margin-top: 8px; }
+.seg button { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--phone); color: var(--ink); font: inherit; cursor: pointer; }
+.seg button.on { border-color: var(--accent); background: var(--chip); color: var(--chip-ink); font-weight: 600; }
+input[type=text] { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--phone); color: var(--ink); font: inherit; margin-top: 6px; }
+label.check { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; cursor: pointer; }
+label.check input { margin-top: 4px; }
+.progress { margin: 18px 0; }
+.progress div { padding: 6px 0; color: var(--muted); }
+.progress div:last-child { color: var(--ink); font-weight: 600; }
+.spinner { width: 34px; height: 34px; border: 3px solid var(--line); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 1s linear infinite; margin: 26px auto 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.card { border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin: 10px 0; }
+.card .top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.card .title { font-weight: 650; }
+.chip { font-size: 12px; padding: 3px 9px; border-radius: 99px; white-space: nowrap;
+  background: var(--chip); color: var(--chip-ink); }
+.chip.ok { background: var(--ok-bg); color: var(--ok); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+.card .why { margin: 6px 0 2px; }
+.card .ev { font-size: 13px; color: var(--muted); }
+.card .concern { font-size: 13px; color: var(--warn); background: var(--warn-bg); border-radius: 8px;
+  padding: 6px 9px; margin-top: 6px; }
+.card .ask { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.card .ask span { font-weight: 600; flex: 1 1 100%; }
+.card .ask button { flex: 1; padding: 9px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--soft); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.card .ask button.yes.on { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.card .ask button.no.on { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.undo { background: none; border: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; padding: 0; margin-top: 6px; }
+.empty { color: var(--muted); font-size: 14px; padding: 6px 0; }
+.stats { font-size: 12px; color: var(--muted); margin-top: 18px; }
+.banner { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }
+.err { background: var(--bad-bg); color: var(--bad); border-radius: 10px; padding: 10px 12px; margin-top: 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+<main class="phone">
+
+  <section id="s-intro" class="screen on">
+    <div id="test-banner" class="banner" hidden>Test mode: emails from your test address count as bank mail.</div>
+    <h1>Find all your credit cards</h1>
+    <p class="muted">We look through your bank emails to find every card you have, including old ones you've
+      forgotten, so you can get the most rewards from each.</p>
+    <ul class="list">
+      <li>Finds cards from statements, welcome and fee emails</li>
+      <li>Spots old, unused and replaced cards</li>
+      <li>Ignores promotions and offers</li>
+    </ul>
+    <button class="btn primary" data-go="s-consent">Find my cards automatically</button>
+    <button class="btn ghost" disabled title="Not part of this proof of concept">Add cards manually</button>
+  </section>
+
+  <section id="s-consent" class="screen">
+    <h1>Before we connect to Gmail</h1>
+    <h2>What we read</h2>
+    <ul class="list">
+      <li>Only emails from these banks</li>
+    </ul>
+    <details class="box"><summary id="bank-count">Banks we read</summary><div id="bank-list" class="banks"></div></details>
+    <h2>What we never do</h2>
+    <ul class="list x">
+      <li>Read personal or other emails</li>
+      <li>Open attachments or statement PDFs</li>
+      <li>Store email text: we keep only the bank, card name and last 4 digits</li>
+      <li>Use this for ads, lending or sharing with anyone</li>
+    </ul>
+    <h2>How far back?</h2>
+    <div class="seg" id="years">
+      <button data-y="1">1 year</button><button data-y="3">3 years</button><button data-y="5" class="on">5 years</button>
+    </div>
+    <h2>Your name as banks write it <span class="muted small">(optional)</span></h2>
+    <input id="name" type="text" placeholder="e.g. Shubham Kadam" autocomplete="name">
+    <p class="small muted">Helps us notice cards that belong to someone else.</p>
+    <label class="check"><input type="checkbox" id="agree">
+      <span>I agree to let this app read emails from the banks above to find my cards. I can disconnect and
+        delete everything at any time.</span></label>
+    <p class="small muted">Next, Google will ask you to allow read access to Gmail. That's the only way Gmail
+      lets apps read any email; we use it only as described above.</p>
+    <button class="btn primary" id="go-scan" disabled>Continue to Google</button>
+    <button class="btn ghost" data-go="s-intro">Back</button>
+  </section>
+
+  <section id="s-scan" class="screen">
+    <div class="spinner"></div>
+    <h1 style="text-align:center">Looking for your cards…</h1>
+    <p class="muted small" style="text-align:center">A Google sign-in window may open in your browser.</p>
+    <div class="progress" id="progress"></div>
+    <div id="scan-err" class="err" hidden></div>
+    <button class="btn ghost" id="scan-back" hidden data-go="s-consent">Back</button>
+  </section>
+
+  <section id="s-results" class="screen">
+    <h1 id="res-title">Your cards</h1>
+    <p class="muted small" id="res-sub"></p>
+    <h2>Your cards</h2><div id="g-owned"></div>
+    <h2>Please confirm</h2><div id="g-review"></div>
+    <h2>Old cards</h2><div id="g-history"></div>
+    <div id="rejected-wrap" hidden><h2>Not yours</h2><div id="g-rejected"></div></div>
+    <div id="apps-wrap" hidden><h2>Applications (not cards)</h2><div id="g-apps"></div></div>
+    <div class="stats" id="stats"></div>
+    <button class="btn ghost" id="rescan">Scan again</button>
+    <button class="btn danger" id="forget">Disconnect Gmail and delete my data</button>
+  </section>
+
+  <section id="s-gone" class="screen">
+    <h1>Disconnected</h1>
+    <p id="gone-msg" class="muted"></p>
+    <button class="btn primary" data-go="s-intro">Start again</button>
+  </section>
+
+</main>
+<script>
+"use strict";
+const TOKEN = "__TOKEN__";
+const DEFAULT_NAME = __NAMES__;
+let years = 5, polling = null;
+
+const $ = (id) => document.getElementById(id);
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls;
+  if (text != null) e.textContent = text; return e; }   // textContent only: card text may come from emails
+async function api(path, body) {
+  const r = await fetch(path, { method: body === undefined ? "GET" : "POST",
+    headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok && r.status !== 409) throw new Error(data.error || ("HTTP " + r.status));
+  return data;
+}
+function show(id) { document.querySelectorAll(".screen").forEach(s => s.classList.toggle("on", s.id === id));
+  window.scrollTo(0, 0); }
+document.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
+
+$("name").value = DEFAULT_NAME || "";
+$("agree").addEventListener("change", () => { $("go-scan").disabled = !$("agree").checked; });
+$("years").addEventListener("click", (e) => { const y = e.target.dataset.y; if (!y) return; years = +y;
+  [...$("years").children].forEach(b => b.classList.toggle("on", b === e.target)); });
+
+api("/api/banks").then(d => {
+  $("bank-count").textContent = `Banks we read (${d.banks.length})`;
+  d.banks.forEach(n => $("bank-list").appendChild(el("div", null, n)));
+  $("test-banner").hidden = !d.test_mode;
+});
+
+$("go-scan").addEventListener("click", startScan);
+$("rescan").addEventListener("click", startScan);
+async function startScan() {
+  show("s-scan"); $("scan-err").hidden = true; $("scan-back").hidden = true; $("progress").textContent = "";
+  try { await api("/api/scan", { years, name: $("name").value }); } catch (e) { return fail(e.message); }
+  clearInterval(polling); polling = setInterval(poll, 800); poll();
+}
+function fail(msg) { $("scan-err").textContent = msg; $("scan-err").hidden = false; $("scan-back").hidden = false; }
+async function poll() {
+  let d; try { d = await api("/api/status"); } catch (e) { clearInterval(polling); return fail(e.message); }
+  const p = $("progress"); p.textContent = ""; (d.progress || []).forEach(m => p.appendChild(el("div", null, m)));
+  if (d.state === "error") { clearInterval(polling); fail(d.error); }
+  if (d.state === "done") { clearInterval(polling); render(d.result); show("s-results"); }
+}
+
+const CHIP = { "Active": "ok", "New": "ok", "Not used recently": "", "May be closed": "warn",
+  "Approved, not seen since": "warn", "Closed": "bad", "Replaced": "", "Not yours": "bad" };
+function cardEl(c) {
+  const d = el("div", "card");
+  const top = el("div", "top"); top.append(el("div", "title", c.title), el("span", "chip " + (CHIP[c.status] || ""), c.status));
+  d.append(top, el("div", "why", c.headline), el("div", "ev", "Seen in: " + c.evidence.join(" · ")));
+  c.concerns.forEach(t => d.append(el("div", "concern", "⚠ " + t)));
+  if (c.question) {
+    const ask = el("div", "ask"); ask.append(el("span", null, c.question));
+    const yes = el("button", "yes" + (c.decision === "yes" ? " on" : ""), "Yes, it's mine");
+    const no = el("button", "no" + (c.decision === "no" ? " on" : ""), "No");
+    yes.onclick = () => decide(c.key, "yes"); no.onclick = () => decide(c.key, "no");
+    ask.append(yes, no); d.append(ask);
+  } else if (c.decision) {
+    const u = el("button", "undo", "Undo my answer"); u.onclick = () => decide(c.key, null); d.append(u);
+  }
+  return d;
+}
+function render(r) {
+  const n = r.groups.owned.length;
+  $("res-title").textContent = n === 1 ? "We found 1 card" : `We found ${n} cards`;
+  $("res-sub").textContent = r.mailbox;
+  for (const g of ["owned", "review", "history", "rejected"]) {
+    const box = $("g-" + g); box.textContent = "";
+    if (!r.groups[g].length) box.append(el("div", "empty", g === "review" ? "Nothing to confirm." : "None."));
+    r.groups[g].forEach(c => box.append(cardEl(c)));
+  }
+  $("rejected-wrap").hidden = !r.groups.rejected.length;
+  $("apps-wrap").hidden = !r.applications.length; $("g-apps").textContent = "";
+  r.applications.forEach(a => $("g-apps").append(el("div", "card",
+    `${a.bank} ${a.product || "credit card"}: application ${a.status === "rejected" ? "not approved" : "in progress"}`)));
+  const s = r.stats;
+  $("stats").textContent = `Read ${s.emails_read} bank emails (${s.full_emails} opened in full) in ${s.seconds}s.`;
+}
+async function decide(key, answer) {
+  try { const d = await api("/api/decide", { key, answer }); render(d.result); } catch (e) { alert(e.message); }
+}
+$("forget").addEventListener("click", async () => {
+  if (!confirm("Disconnect Gmail and delete all card data found on this computer?")) return;
+  const d = await api("/api/forget", {});
+  $("gone-msg").textContent = d.revoked ? "Google access was revoked and your data was deleted."
+    : "Your data was deleted. We couldn't reach Google to revoke access; remove it at myaccount.google.com/permissions.";
+  show("s-gone");
+});
+</script>
+</body>
+</html>
