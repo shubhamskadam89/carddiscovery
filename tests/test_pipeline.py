@@ -379,3 +379,12 @@ def test_recently_issued_card_is_active_not_dormant():
     cards, _, _ = run([mail("sbi", "Welcome aboard!",
                             "Your SBI Card SimplySAVE **** **** **** 1029 has been activated", days_ago=3)])
     assert cards[0].status == Status.ACTIVE
+
+
+def test_rejected_application_stays_listed_after_a_later_card():
+    msgs = [
+        mail("axis", "Update on your Credit Card application", "We regret we are unable to approve", days_ago=100),
+        mail("axis", "Your Axis Bank ACE Credit Card Statement", "statement for card ending 1111", days_ago=10),
+    ]
+    _, apps, _ = run(msgs)
+    assert [(a.bank_id, a.status) for a in apps] == [("axis", "rejected")]

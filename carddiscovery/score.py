@@ -15,8 +15,8 @@ WEIGHTS: dict[T, float] = {
     T.STATEMENT: 0.95,
     T.DISPATCH_ACTIVATION: 0.95,
     T.WELCOME: 0.90,
-    T.ANNUAL_FEE: 0.85,
-    T.RENEWAL: 0.85,
+    T.ANNUAL_FEE: 0.90,  # fees are only charged on cards you hold
+    T.RENEWAL: 0.90,
     T.REPLACEMENT: 0.90,  # names the new card number: as strong as a dispatch notice
     T.UPGRADE: 0.90,
     T.POINTS: 0.80,

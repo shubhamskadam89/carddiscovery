@@ -1,6 +1,8 @@
 # Automatic Credit Card Discovery via Email — Design Exploration
 
-Status: proposal for review · Date: 2026-11-13 · No code yet
+Status: proposal for review · Date: 2026-11-13
+
+> **Update 2026-11-15: discovery now runs on the phone.** See [mobile-design.md](mobile-design.md). The server-side processing parts of this doc (§3 architecture, §4 workflow, §9 performance, §10 schema, §11 API, §12 security) are replaced by it. The problem analysis, filtering strategy, extraction, scoring and the test matrix below still apply.
 
 ---
 

@@ -113,6 +113,12 @@ class Registry:
         """Everything to search `from:` for: bank domains plus any test senders."""
         return [d for b in self.banks.values() for d in b.domains] + self.test_senders
 
+    def product_spans(self, bank_id: str, text: str, product: str) -> list[int]:
+        bank = self.banks.get(bank_id)
+        if not bank:
+            return []
+        return [m.start() for pat, p in bank.product_patterns if p == product for m in pat.finditer(text)]
+
     def products_in(self, bank_id: str, text: str) -> list[str]:
         """Canonical products mentioned in text, ordered by first position."""
         bank = self.banks.get(bank_id)

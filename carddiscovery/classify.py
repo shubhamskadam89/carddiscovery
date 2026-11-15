@@ -39,7 +39,8 @@ CREDIT_WORDS = _r(r"credit card|\bcc\b|charge card|card ?member")  # "card endin
 
 RULES: list[tuple[T, re.Pattern]] = [
     (T.APPLICATION_REJECTED, _r(
-        r"regret|unable to (approve|process)|not (been )?approved|"
+        r"regret to inform|regret that we|unable to approve|unable to process your (application|request)|"
+        r"not (been )?approved|"
         r"(application|request)\b.{0,40}\b(declined|rejected|unsuccessful)")),
     (T.APPLICATION_RECEIVED, _r(
         r"(application|request)\b.{0,40}\b(received|submitted|in progress|under (process|review)|status)|"
@@ -73,8 +74,30 @@ RULES: list[tuple[T, re.Pattern]] = [
 ]
 
 
+# Lines every bank email carries: security tips, RBI notices, grievance contacts,
+# legal footers. They mention "closed", "not been used", "regret", "OTP" and other
+# card products, so rules must not read them.
+BOILERPLATE = _r(
+    r"reserve bank of india|\brbi\b|ombudsman|grievance|nodal officer|never ask|do not share|"
+    r"don't share|system[- ]generated|do not reply|unsubscribe|registered office|\bcin\b|disclaimer|"
+    r"intended recipient|all rights reserved|registered trademark|most important terms|\bmitc\b|"
+    r"regret any inconvenience|toll[- ]free|report (it )?immediately|to block your card|sms block|"
+    r"view (this email )?in (your )?browser|stay safe|customer care"
+)
+
+
+def _units(text: str) -> list[str]:
+    """Lines, then sentences: the pieces boilerplate and ads are removed in."""
+    return [u for u in re.split(r"\n|(?<=[.!?])\s+", text) if u.strip()]
+
+
+def core_text(text: str) -> str:
+    """The email without boilerplate lines."""
+    return "\n".join(u for u in _units(text) if not BOILERPLATE.search(u))
+
+
 def _without_offers(text: str) -> str:
-    return " ".join(s for s in re.split(r"(?<=[.!?])\s+", text) if not OFFER.search(s))
+    return "\n".join(u for u in _units(text) if not OFFER.search(u))
 
 
 def _match_rules(text: str) -> T | None:
@@ -87,7 +110,7 @@ def _match_rules(text: str) -> T | None:
 def classify(msg: MessageMeta, bank_id: str | None, has_last4: bool) -> T:
     subject = msg.subject or ""
     head = f"{subject}\n{msg.snippet or ''}"
-    full = msg.text()
+    full = core_text(msg.text())
 
     if OTP.search(subject):
         return T.OTP
@@ -182,7 +205,9 @@ def analyze(
 
     l4 = extract.last4s(text)
     etype = classify(msg, bank_id, bool(l4))
-    products = registry.products_in(bank_id, text) if bank_id else []
+    # Products come from the email minus boilerplate and ad banners, so a statement
+    # that also advertises another card still names the card it is about.
+    products, best = _products(registry, bank_id, msg.subject or "", text, l4)
     return Evidence(
         message_id=msg.message_id,
         date=msg.date,
@@ -190,6 +215,7 @@ def analyze(
         type=etype,
         last4s=l4,
         products=products,
+        product=best,
         product_raw=None if products else _clean_raw_product(extract.product_raw(text), registry),
         dkim_pass=True if test else dkim_pass(msg, bank_id, registry),
         forwarded=is_forwarded(msg),
@@ -199,6 +225,29 @@ def analyze(
         used_body=msg.body is not None,
         test=test,
     )
+
+
+def _products(registry: Registry, bank_id: str | None, subject: str, text: str,
+              l4: list[str]) -> tuple[list[str], str | None]:
+    """All products named (in order) and the one this email is most likely about:
+    the one in the subject, else the one written closest to the card number."""
+    if not bank_id:
+        return [], None
+    clean = _without_offers(core_text(text))
+    products = registry.products_in(bank_id, clean) or registry.products_in(bank_id, core_text(text))
+    if len(products) <= 1:
+        return products, (products[0] if products else None)
+    in_subject = [p for p in registry.products_in(bank_id, subject) if p in products]
+    if len(in_subject) == 1:
+        return products, in_subject[0]
+    if l4:
+        anchor = clean.find(l4[0])
+        if anchor >= 0:
+            def distance(p: str) -> int:
+                spans = registry.product_spans(bank_id, clean, p)
+                return min((abs(s - anchor) for s in spans), default=10**9)
+            return products, min(products, key=distance)
+    return products, products[0]
 
 
 _FILLER = {"your", "the", "a", "an", "my", "bank", "card", "new", "dear", "of", "for", "on"}
@@ -228,6 +277,8 @@ def needs_body(ev: Evidence) -> bool:
         return False
     if ev.type in (T.UPGRADE, T.REPLACEMENT):
         return len(ev.last4s) < 2 or not ev.products
+    if ev.type == T.STATEMENT:
+        return True  # rare and valuable: read in full to catch add-on cards further down
     if ev.type in (T.TRANSACTION_ALERT, T.PAYMENT, T.POINTS):
         return not ev.last4s  # these rarely name the product; the number is what matters
     return not ev.last4s or not ev.products

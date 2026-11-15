@@ -134,3 +134,57 @@ def test_messy_emails_match_expectations():
     got = {(c.bank_id, c.last4 or c.product): (group(c), c.product) for c in cards}
     expected = {k: v for e in MESSY if e["expect"] for k, v in e["expect"].items()}
     assert got == expected
+
+
+# ---------------------------------------------------------------- HTML emails
+
+def _gmail_payload(html: str, plain: str | None = None) -> dict:
+    import base64
+    b64 = lambda s: base64.urlsafe_b64encode(s.encode()).decode()
+    parts = [{"mimeType": "text/plain", "body": {"data": b64(plain)}}] if plain else []
+    parts.append({"mimeType": "text/html", "body": {"data": b64(html)}})
+    return {"mimeType": "multipart/alternative", "parts": parts}
+
+
+def test_html_emails_match_expectations():
+    from tests.html_emails import HTML
+    _check_html_kit(HTML)
+
+
+def test_long_formal_emails_match_expectations():
+    from tests.long_emails import LONG
+    _check_html_kit(LONG)
+
+
+def _check_html_kit(kit):
+    from carddiscovery.classify import needs_body
+    from carddiscovery.providers.gmail import _extract_body, html_to_text
+
+    evs = []
+    for e in kit:
+        body, _ = _extract_body(_gmail_payload(e["html"], e.get("plain")))
+        m = selfmail(e["subject"], body)
+        m.snippet, m.body = html_to_text(e["html"])[:200], None
+        ev = analyze(m, REG, [ME], ["Shubham Kadam"])
+        if needs_body(ev):
+            m.body = body
+            ev = analyze(m, REG, [ME], ["Shubham Kadam"])
+        evs.append(ev)
+    cards, _ = resolve(evs)
+    score_all(cards, NOW)
+    got = {(c.bank_id, c.last4 or c.product): (group(c), c.product) for c in cards}
+    expected = {k: v for e in kit if e["expect"] for k, v in e["expect"].items()}
+    assert got == expected
+
+
+def test_html_parsing_details():
+    from carddiscovery.extract import last4s
+    from carddiscovery.providers.gmail import _extract_body, html_to_text
+
+    assert "XXXX 3691" in html_to_text("XXXX <span>36</span><span>91</span>")
+    assert html_to_text("<td>a</td><td>b</td>") == "a\nb"  # cells stay on separate lines
+    assert html_to_text("A&nbsp;&zwnj;B") == "A B"
+    body, _ = _extract_body(_gmail_payload("<p>card ending 1234</p>", plain="View in an HTML client"))
+    assert "1234" in body
+    assert last4s("Savings A/c XX7788, card XX1111, linked account number XXXXXX4455") == ["1111"]
+    assert last4s("Card Member account ending 71005") == ["1005"]

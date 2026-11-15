@@ -52,11 +52,23 @@ _LAST4_PATTERNS = [
 ]
 
 
+# Masked numbers right after these words are bank accounts, not cards
+# ("Savings A/c XX7788", "linked account number XXXXXX4455"). "Account ending"
+# alone is kept: Amex calls its cards accounts.
+_ACCOUNT_BEFORE = re.compile(
+    r"(?:\ba/c|\bacct\.?|\baccount\s+(?:no\.?|number)|\b(?:savings|current|salary|linked|loan)\s+"
+    r"(?:a/c|acct|account)\w*(?:\s+(?:no\.?|number))?)\s*[:\-]?\s*$",
+    re.IGNORECASE,
+)
+
+
 def last4s(text: str) -> list[str]:
     """Distinct last-4 digits of masked card numbers, in order of appearance."""
     hits: list[tuple[int, str]] = []
     for p in _LAST4_PATTERNS:
         for m in p.finditer(text):
+            if _ACCOUNT_BEFORE.search(text[max(0, m.start() - 40):m.start()]):
+                continue
             hits.append((m.start(1), m.group(1)))
     seen: list[str] = []
     for _, d in sorted(hits):

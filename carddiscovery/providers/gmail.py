@@ -241,6 +241,13 @@ def _to_meta(raw: dict) -> MessageMeta:
     )
 
 
+# Tags that separate words. Inline tags (span, b, a, font) don't, so
+# "XXXX <span>36</span><span>91</span>" stays "XXXX 3691".
+_BLOCK_TAGS = {"br", "p", "div", "tr", "td", "th", "li", "ul", "ol", "table", "tbody", "thead",
+               "h1", "h2", "h3", "h4", "h5", "h6", "hr", "section", "header", "footer", "center", "img"}
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u034f\u00ad"), None)
+
+
 class _HTMLText(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -250,12 +257,14 @@ class _HTMLText(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style"):
             self._skip += 1
-        elif tag in ("br", "p", "div", "tr", "td", "li"):
-            self.parts.append(" ")
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n")
 
     def handle_endtag(self, tag):
         if tag in ("script", "style") and self._skip:
             self._skip -= 1
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n")
 
     def handle_data(self, data):
         if not self._skip:
@@ -265,7 +274,14 @@ class _HTMLText(HTMLParser):
 def html_to_text(html: str) -> str:
     p = _HTMLText()
     p.feed(html)
-    return " ".join(" ".join(p.parts).split())
+    return tidy("".join(p.parts).translate(_INVISIBLE))
+
+
+def tidy(text: str) -> str:
+    """Collapse spaces within lines but keep line breaks, so footers and banners stay
+    separate from the main content."""
+    lines = (" ".join(line.split()) for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
 
 
 def _extract_body(payload: dict) -> tuple[str, list[str]]:
@@ -289,5 +305,6 @@ def _extract_body(payload: dict) -> tuple[str, list[str]]:
             walk(sub)
 
     walk(payload)
-    text = " ".join(plain) if plain else " ".join(html_to_text(h) for h in html)
-    return " ".join(text.split())[:20000], names
+    # Prefer HTML: banks often put only a stub ("view in an HTML-capable client") in plain text.
+    text = " ".join(html_to_text(h) for h in html) if html else " ".join(plain)
+    return tidy(text)[:20000], names

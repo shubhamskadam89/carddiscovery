@@ -53,8 +53,9 @@ def resolve(evidence: list[Evidence]) -> tuple[list[Card], list[Application]]:
         if ev.type == T.UPGRADE and ev.products:
             # Same number, new variant.
             primary.product_history.append((ev.date, ev.products[-1]))
-        elif len(ev.products) == 1 and len(ev.last4s) == 1:
-            primary.product_history.append((ev.date, ev.products[0]))
+        elif ev.product and (len(ev.last4s) == 1 or ev.addon):
+            # With add-on numbers present, the product belongs to the primary card.
+            primary.product_history.append((ev.date, ev.product))
         for extra in ev.last4s[1:]:
             c = card_for(bank, extra)
             c.evidence.append(ev)
@@ -70,7 +71,7 @@ def resolve(evidence: list[Evidence]) -> tuple[list[Card], list[Application]]:
             continue
         bank = ev.bank_id
         same_bank = [c for c in cards.values() if c.bank_id == bank]
-        product = ev.products[-1] if ev.products else None
+        product = ev.product or (ev.products[-1] if ev.products else None)
         if product:
             matches = [c for c in same_bank if product in _products(c)]
             if len(matches) == 1:
@@ -119,7 +120,7 @@ def _products(c: Card) -> set[str]:
 def _applications(evidence: list[Evidence], cards: list[Card]) -> list[Application]:
     apps: dict[tuple[str, str | None], Application] = {}
     for ev in sorted((e for e in evidence if e.bank_id and e.type in APPLICATION_TYPES), key=lambda e: e.date):
-        product = ev.products[-1] if ev.products else None
+        product = ev.product or (ev.products[-1] if ev.products else None)
         key = (ev.bank_id, product)
         status = "rejected" if ev.type == T.APPLICATION_REJECTED else "in_progress"
         if key not in apps:
@@ -128,9 +129,10 @@ def _applications(evidence: list[Evidence], cards: list[Card]) -> list[Applicati
             a = apps[key]
             a.last_seen = ev.date
             a.status = status
-    # An application followed by a new numbered card of that bank/product was fulfilled.
+    # An in-progress application followed by a new numbered card of that bank/product
+    # was fulfilled. A rejected one stays listed even if another card came later.
     def fulfilled(a: Application) -> bool:
-        return any(
+        return a.status == "in_progress" and any(
             c.bank_id == a.bank_id and c.last4 and c.first_seen and c.first_seen >= a.first_seen
             and (a.product is None or a.product in _products(c))
             for c in cards

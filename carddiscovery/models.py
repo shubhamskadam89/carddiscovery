@@ -88,6 +88,7 @@ class Evidence:
     type: EvidenceType
     last4s: list[str] = field(default_factory=list)
     products: list[str] = field(default_factory=list)  # canonical names, in order of appearance
+    product: str | None = None  # the product this email is most likely about
     product_raw: str | None = None
     dkim_pass: bool = False
     forwarded: bool = False
@@ -105,6 +106,7 @@ class Evidence:
             "type": self.type.value,
             "last4s": self.last4s,
             "products": self.products,
+            "product": self.product,
             "product_raw": self.product_raw,
             "dkim_pass": self.dkim_pass,
             "forwarded": self.forwarded,
@@ -124,6 +126,7 @@ class Evidence:
             type=EvidenceType(d["type"]),
             last4s=list(d.get("last4s", [])),
             products=list(d.get("products", [])),
+            product=d.get("product"),
             product_raw=d.get("product_raw"),
             dkim_pass=d.get("dkim_pass", False),
             forwarded=d.get("forwarded", False),
