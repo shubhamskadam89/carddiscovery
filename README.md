@@ -4,7 +4,7 @@ Finds the credit cards a person owns by reading their Gmail (read-only), includi
 
 This POC runs on your computer. It mirrors the mobile design in [docs/mobile-design.md](docs/mobile-design.md): email is read and processed locally, and only card facts are kept. There are two ways to use it:
 
-- **`carddiscovery serve`**: a local web page that mimics the phone flow. Intro → consent (which banks, how far back) → Google sign-in → scan → review with Yes/No → disconnect and delete.
+- **`carddiscovery serve`**: the real app flow in a phone frame. **Phone number → OTP → wallet → our explainer (which banks, how far back) → Google's own consent screen → scan → review with Yes/No → cards saved to your account.** Settings has scan again, disconnect Gmail, log out and delete account.
 - **`carddiscovery discover`**: the same engine from the terminal.
 
 ## How it works
@@ -26,6 +26,9 @@ This POC runs on your computer. It mirrors the mobile design in [docs/mobile-des
 | Forged bank emails | Only the signature result Gmail itself added (`mx.google.com`) is trusted; a sender can't fake one |
 | Test mode | `--test-sender` only works with `CARDDISCOVERY_DEV=1`, and test emails must still pass Gmail's signature check for the test sender's own address |
 | Local web page | Listens on `127.0.0.1` only, needs a random token on every request, rejects foreign Host headers, and never returns email text |
+| App login | Phone + 6-digit OTP: stored only as an HMAC, valid 5 minutes, 5 wrong tries burns it, resend after 30 s, max 5 per hour, single use. Sessions are random tokens stored hashed, in an HttpOnly cookie, valid 7 days. Accounts live in `~/.carddiscovery/accounts.db`. |
+| Google consent | A redirect from the app with a single-use `state` and PKCE; the callback must match the logged-in account. One Google token per account in `~/.carddiscovery/tokens/`. |
+| Real SMS | Not wired up. A real sender (MSG91, Twilio, Gupshup...) plugs into `accounts.OtpSender`; in India it needs DLT registration of the sender ID and message template. |
 | Disconnect | `carddiscovery forget` (or the button on the page) revokes access with Google and deletes the token and cache |
 | Printed subjects | `--show-unknown` hides digits before printing |
 
@@ -57,7 +60,12 @@ python3 -m venv .venv
 CARDDISCOVERY_DEV=1 .venv/bin/carddiscovery serve --test-sender your.personal@gmail.com --name "Your Name"
 ```
 
-3. In the browser: **Find my cards automatically** → tick the consent → **Continue to Google** → sign in with the account you're scanning → review the cards.
+3. In the phone frame:
+   1. Enter any 10-digit Indian mobile number and tap **Get OTP**. In this development build the code is **printed in the terminal** running `serve` (look for `[DEV OTP]`), not sent by SMS.
+   2. Enter the code. You land on your (empty) wallet.
+   3. **Find my cards from Gmail** → choose how far back → tick the consent → **Continue with Google**.
+   4. Google's own screen opens: pick the account you're scanning and allow "View your email messages and settings". Google handles your Google password and 2-step verification; the app never sees them. If you untick Gmail access or press Cancel, the app shows what happened and nothing is read.
+   5. You come back to the app, the scan runs, and you review the cards. They're saved to your account and shown on the wallet.
 
 Or from the terminal:
 

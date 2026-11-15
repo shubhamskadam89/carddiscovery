@@ -55,6 +55,62 @@ def authorize(credentials_file: Path, token_file: Path | None = None):
     return creds
 
 
+class ScopeNotGranted(RuntimeError):
+    """The user unticked Gmail access on Google's consent screen."""
+
+
+def start_web_flow(credentials_file: Path, redirect_uri: str, login_hint: str | None = None):
+    """Begin Google's consent as a redirect from our own page.
+
+    Returns (authorization_url, state, flow). Uses PKCE (a one-time code verifier
+    kept server-side) and a random `state` that the callback must echo back, so a
+    callback can't be forged or replayed. Desktop OAuth clients accept any
+    http://127.0.0.1:<port> redirect.
+    """
+    from google_auth_oauthlib.flow import Flow
+
+    if not credentials_file.exists():
+        raise SystemExit(f"OAuth client file not found: {credentials_file}")
+    flow = Flow.from_client_secrets_file(str(credentials_file), scopes=SCOPES, redirect_uri=redirect_uri,
+                                         autogenerate_code_verifier=True)
+    extra = {"login_hint": login_hint} if login_hint else {}
+    url, state = flow.authorization_url(access_type="offline", prompt="consent",
+                                        include_granted_scopes="false", **extra)
+    return url, state, flow
+
+
+def finish_web_flow(flow, code: str, token_file: Path):
+    """Exchange the code for credentials, check Gmail access was actually granted,
+    and save the token (readable only by this user)."""
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")  # user may grant fewer scopes
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    granted = set(getattr(creds, "granted_scopes", None) or creds.scopes or [])
+    if SCOPES[0] not in granted:
+        raise ScopeNotGranted("Gmail read access wasn't granted")
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(creds.to_json())
+    os.chmod(token_file, 0o600)
+    return creds
+
+
+def load_creds(token_file: Path):
+    """Saved credentials for an account, refreshed if needed, or None."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    if not token_file.exists():
+        return None
+    creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+    if not creds.valid and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            token_file.write_text(creds.to_json())
+        except Exception:
+            return None  # Testing-mode refresh tokens expire after 7 days
+    return creds if creds.valid else None
+
+
 class GmailProvider:
     def __init__(self, creds, user_id: str = "me"):
         from googleapiclient.discovery import build
