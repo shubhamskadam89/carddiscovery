@@ -52,6 +52,11 @@ class Scan:
     error: str | None = None
     mailbox: str | None = None
     result: object = None        # pipeline.RunResult
+    cancelled: bool = False      # set by disconnect/delete: stop and keep nothing
+
+
+class ScanCancelled(Exception):
+    pass
 
 
 class App:
@@ -118,18 +123,36 @@ class App:
         return True
 
     def _scan(self, acc: Account, scan: Scan, years: int, names: list[str], creds) -> None:
+        """Runs in a thread. If the user disconnects or deletes their account while
+        it runs, it stops at the next step and nothing it found is kept."""
         from .pipeline import discover
+
+        def progress(m: str) -> None:
+            if scan.cancelled:
+                raise ScanCancelled()
+            scan.progress.append(m.capitalize())
+
         try:
             provider = self.provider_factory(creds)
             scan.mailbox = provider.mailbox()
-            self.accounts.set_connection(acc.id, scan.mailbox)
-            scan.progress.append(f"Reading bank emails in {scan.mailbox}")
-            scan.result = discover(provider, self.registry, self.ledger(),
-                                   user_names=names or self.names, history_years=years,
-                                   progress=lambda m: scan.progress.append(m.capitalize()))
-            self.accounts.save_cards(acc.id, self._flat(scan))
-            scan.progress.append(f"Done in {scan.result.stats.seconds}s")
-            scan.state = "done"
+            with self.lock:
+                if scan.cancelled:
+                    raise ScanCancelled()
+                self.accounts.set_connection(acc.id, scan.mailbox)
+            progress(f"Reading bank emails in {scan.mailbox}")
+            result = discover(provider, self.registry, self.ledger(),
+                              user_names=names or self.names, history_years=years, progress=progress)
+            with self.lock:  # check and save atomically with disconnect()
+                if scan.cancelled:
+                    raise ScanCancelled()
+                scan.result = result
+                self.accounts.save_cards(acc.id, self._flat(scan))
+                scan.progress.append(f"Done in {result.stats.seconds}s")
+                scan.state = "done"
+        except ScanCancelled:
+            scan.state, scan.result = "idle", None
+            if scan.mailbox:  # evidence written before the stop: drop it
+                self.ledger().forget(scan.mailbox, keep_decisions=False)
         except Exception as e:  # message only; never email content
             scan.error, scan.state = f"{type(e).__name__}: {e}", "error"
 
@@ -148,6 +171,10 @@ class App:
 
     def disconnect(self, acc: Account) -> dict:
         from .providers.gmail import revoke
+        with self.lock:  # a running scan must not save anything after this point
+            scan = self.scans.pop(acc.id, None)
+            if scan:
+                scan.cancelled = True
         tf = self.token_file(acc.id)
         revoked = revoke(tf)
         if tf.exists():
@@ -155,9 +182,11 @@ class App:
         mailbox = self.accounts.connection(acc.id)
         if mailbox:
             self.ledger().forget(mailbox, keep_decisions=False)
-        self.accounts.delete_cards(acc.id, source="gmail")
-        self.accounts.set_connection(acc.id, None)
-        self.scans.pop(acc.id, None)
+        if scan and scan.mailbox and scan.mailbox != mailbox:
+            self.ledger().forget(scan.mailbox, keep_decisions=False)
+        with self.lock:
+            self.accounts.delete_cards(acc.id, source="gmail")
+            self.accounts.set_connection(acc.id, None)
         return {"revoked": revoked}
 
     def delete_account(self, acc: Account) -> dict:

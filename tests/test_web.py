@@ -198,3 +198,38 @@ def test_logout_and_delete_account(env):
     c.call("/api/delete_account", {})
     assert c.call("/api/me")[0] == 401
     assert app.accounts.db.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
+
+
+def test_disconnect_during_a_running_scan_keeps_nothing(env):
+    """Regression: a scan that finished after Disconnect used to save its cards again."""
+    c, sender, app, _, tmp = env
+    login(c, sender)
+    connect_and_scan(c, app)
+    acc = app.accounts.session(next(ck.value for ck in c.jar if ck.name == "cd_session"))
+
+    paused, release = threading.Event(), threading.Event()
+    real_factory = app.provider_factory
+
+    def slow_factory(creds):
+        box = real_factory(creds)
+        real_get = box.get_metadata
+
+        def get_metadata(ids):
+            paused.set()
+            release.wait(5)  # hold the scan mid-read until the test has disconnected
+            return real_get(ids)
+        box.get_metadata = get_metadata
+        return box
+
+    app.provider_factory = slow_factory
+    app.ledger().forget(ME)  # make the rescan actually read mail
+    assert c.call("/api/scan", {"years": 5})[0] == 202
+    assert paused.wait(5)
+    c.call("/api/disconnect", {})
+    release.set()
+    time.sleep(0.5)
+
+    assert app.accounts.cards(acc.id) == []
+    assert app.accounts.connection(acc.id) is None
+    assert app.ledger().known(ME) == {}
+    assert c.call("/api/status")[1]["state"] == "idle"
