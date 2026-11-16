@@ -52,3 +52,6 @@ coverage/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# mini server: master key, logs, simulator tokens and answer file
+.local/

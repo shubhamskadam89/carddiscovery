@@ -284,3 +284,32 @@ def test_script_content_is_never_read():
     for e in PRO:
         body, _ = _extract_body(_gmail_payload(e["html"]))
         assert TRAP not in body and "track()" not in body
+
+
+def test_batch2_mixed_styles_after_batch1():
+    from tests.batch2_emails import BATCH_2, EXPECTED_ALL, EXPECTED_APPLICATIONS
+    from tests.pro_emails import BATCH_1
+    from carddiscovery.providers.gmail import _extract_body
+    msgs = []
+    for i, e in enumerate(BATCH_1 + BATCH_2):
+        body = _extract_body(_gmail_payload(e["html"]))[0] if "html" in e else e["body"]
+        m = selfmail(e["subject"], body)
+        m.date = m.date + timedelta(minutes=i)
+        msgs.append(m)
+    cards, apps, _ = run(msgs)
+    assert {(c.bank_id, c.last4 or c.product): (group(c), c.product) for c in cards} == EXPECTED_ALL
+    assert [(a.bank_id, a.status) for a in apps] == EXPECTED_APPLICATIONS
+
+
+def test_batch3_only_credit_cards_survive():
+    from tests.batch3_emails import BATCH_3, EXPECTED
+    from carddiscovery.providers.gmail import _extract_body
+    msgs = []
+    for i, e in enumerate(BATCH_3):
+        body = _extract_body(_gmail_payload(e["html"]))[0] if "html" in e else e["body"]
+        m = selfmail(e["subject"], body)
+        m.date = m.date + timedelta(minutes=i)
+        msgs.append(m)
+    cards, apps, _ = run(msgs)
+    assert {(c.bank_id, c.last4 or c.product): (group(c), c.product) for c in cards} == EXPECTED
+    assert apps == []

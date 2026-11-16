@@ -15,6 +15,7 @@ from . import extract
 from .models import Evidence, EvidenceType as T, MessageMeta
 from .registry import TEST_BANK_ID, Registry, sender_domain
 
+_DEBIT_SUBJECT = re.compile(r"\bdebit\s+card\b", re.IGNORECASE)
 _DATE_TAG = re.compile(r"\[date:\s*(\d{4})-(\d{2})-(\d{2})\]", re.IGNORECASE)
 
 def _r(p: str) -> re.Pattern:
@@ -77,6 +78,11 @@ def classify(msg: MessageMeta, bank_id: str | None, has_last4: bool) -> T:
 
     if OTP.search(subject):
         return T.OTP
+    # A subject that says "debit card" (and not credit) settles it, whatever ads the
+    # body carries ("Get more rewards with a Credit Card!").
+    if (bank_id not in CREDIT_ONLY_BANKS and _DEBIT_SUBJECT.search(subject)
+            and not CREDIT_WORDS.search(subject)):
+        return T.NOT_CREDIT_CARD
     # Debit/account mail often carries a "get a credit card" ad; ignore ad sentences
     # when deciding whether the email is about a credit card at all.
     if (bank_id not in CREDIT_ONLY_BANKS and NON_CREDIT.search(head)
@@ -251,12 +257,15 @@ BODY_WORTHY = {
 }
 
 
-def needs_body(ev: Evidence) -> bool:
+def needs_body(ev: Evidence, full_statements: bool = True) -> bool:
+    """Whether the full email (60 quota units, vs 20 for headers) is worth reading.
+    `full_statements=False` reads a statement in full only when the header lacks the
+    number or product: cheaper, but add-on cards further down are missed."""
     if ev.bank_id is None or ev.type not in BODY_WORTHY:
         return False
     if ev.type in (T.UPGRADE, T.REPLACEMENT):
         return len(ev.last4s) < 2 or not ev.products
-    if ev.type == T.STATEMENT:
+    if ev.type == T.STATEMENT and full_statements:
         return True  # rare and valuable: read in full to catch add-on cards further down
     if ev.type in (T.TRANSACTION_ALERT, T.PAYMENT, T.POINTS):
         return not ev.last4s  # these rarely name the product; the number is what matters

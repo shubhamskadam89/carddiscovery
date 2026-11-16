@@ -1,6 +1,8 @@
 # Card Discovery: mobile-first, on-device design
 
-Status: proposal · Date: 2026-11-15 · Replaces the server-side processing parts of [card-discovery-design.md](card-discovery-design.md) (§3, §4, §9–§12). Its problem analysis, scoring approach and test matrix still apply.
+Status: proposal · Date: 2026-11-15
+
+> **Update 2026-11-16: processing moved to the server.** See [architecture.md](architecture.md). The card picker as the main entry, Google's server auth code, and server-side workers replace the on-device scan described here. The consent wording, source tags, Google/DPDP research (§3.1, §6) and test-vector approach still apply. · Replaces the server-side processing parts of [card-discovery-design.md](card-discovery-design.md) (§3, §4, §9–§12). Its problem analysis, scoring approach and test matrix still apply.
 
 ---
 

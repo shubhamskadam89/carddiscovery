@@ -184,5 +184,54 @@ PRO = [
          expect=None),
 ]
 
+# Second batch: arrives after a first scan of P1–P10, to test re-scanning.
+PRO += [
+    dict(id="P15", subject="Your Axis Bank Atlas Credit Card has been dispatched",
+         html=_doc("Axis Bank", "#97144d", "Card Dispatched", "Your new card is on its way",
+                   _ref() + "<p>Dear Shubham Kadam,</p><p>Your Axis Bank Atlas Credit Card ending 8531 has been "
+                   "dispatched via Blue Dart (AWB 5512903347) and will reach you in 3 to 5 working days.</p>"
+                   + _table([("Card", "Atlas Credit Card XX8531"), ("Courier", "Blue Dart"),
+                             ("Expected delivery", "21 Nov 2026")])),
+         tests="New card dispatched (recent): new and active",
+         expect={("axis", "8531"): ("owned", "Atlas")}),
+    dict(id="P16", subject="Annual fee charged on your SBI Card",
+         html=_doc("SBI Card", "#0f4c81", "Annual Fee", "Annual fee of Rs. 4,999 + GST charged",
+                   _ref() + "<p>Dear Shubham Kadam,</p><p>An annual fee of Rs. 4,999 + GST has been charged to your "
+                   "SBI Card ELITE ending 3333 for the membership year starting November 2026.</p>"
+                   + _table([("Card", "SBI Card ELITE XX3333"), ("Annual fee", "Rs. 4,999 + GST")])),
+         tests="Fee notice for the old, unused SBI card: still yours, not used recently",
+         expect=None),
+    dict(id="P17", subject="Transaction alert for your HDFC Bank Credit Card",
+         html=_doc("HDFC Bank", "#004c8f", "Transaction Alert", "Rs. 1,250.00 spent on your card",
+                   _ref() + "<p>Dear Customer,</p><p>Rs. 1,250.00 was spent on your HDFC Bank Credit Card "
+                   "ending 7410 at SWIGGY on 15 Nov 2026.</p>"
+                   + _table([("Card", "XX7410"), ("Amount", "Rs. 1,250.00"), ("Merchant", "SWIGGY")])),
+         tests="Fresh alert on a card already found: no new card",
+         expect=None),
+    dict(id="P18", subject="Your YES BANK Credit Card statement",
+         html=_doc("YES BANK", "#00518f", "Credit Card Statement", "Your statement is ready",
+                   _ref("2021-08-05") + "<p>Dear Shubham Kadam,</p><p>Your YES Bank Marquee Credit Card "
+                   "statement is ready.</p>" + _table([("Card number", "XXXX XXXX XXXX 4321"),
+                                                       ("Total amount due", "Rs. 2,140.00")])),
+         tests="Old statement from another bank (2021): not used recently",
+         expect={("yes", "4321"): ("owned", "Marquee")}),
+    dict(id="P19", subject="Payment due reminder for your ICICI Bank Credit Card",
+         html=_doc("ICICI Bank", "#b02a30", "Payment Reminder", "Payment due on 20 Nov 2026",
+                   _ref() + "<p>Dear Priya Sharma,</p><p>The payment for your ICICI Bank Credit Card ending 9191 "
+                   "is due on 20 Nov 2026.</p>" + _table([("Card", "XX9191"), ("Total amount due", "Rs. 3,450.00")])),
+         tests="Someone else's card (name mismatch): asks to confirm",
+         expect={("icici", "9191"): ("review", None)}),
+    dict(id="P20", subject="Your Kotak Credit Card has not been used",
+         html=_doc("Kotak Mahindra Bank", "#ed1c24", "Card Inactivity", "Use your card to keep it active",
+                   _ref("2025-09-01") + "<p>Dear Shubham Kadam,</p><p>Your Kotak White Credit Card ending 1593 "
+                   "has not been used for over a year. As per RBI guidelines, an unused card may be closed after "
+                   "intimation. Use it within 30 days to keep it active.</p>"),
+         tests="Inactivity warning (2025): may be closed, asks if you still have it",
+         expect={("kotak", "1593"): ("review", "White")}),
+]
+
+BATCH_1 = [e for e in PRO if e["id"] in {f"P{i}" for i in range(1, 11)}]
+BATCH_2 = [e for e in PRO if e not in BATCH_1]
+
 # Applications the full set should produce.
 EXPECTED_APPLICATIONS = [("indusind", "rejected")]

@@ -2,7 +2,7 @@
 
 Status: proposal for review · Date: 2026-11-13
 
-> **Update 2026-11-15: discovery now runs on the phone.** See [mobile-design.md](mobile-design.md). The server-side processing parts of this doc (§3 architecture, §4 workflow, §9 performance, §10 schema, §11 API, §12 security) are replaced by it. The problem analysis, filtering strategy, extraction, scoring and the test matrix below still apply.
+> **Update 2026-11-16:** the current architecture is [architecture.md](architecture.md) (server-side workers, card picker first). [mobile-design.md](mobile-design.md) describes the earlier on-device option. The server-side processing parts of this doc (§3 architecture, §4 workflow, §9 performance, §10 schema, §11 API, §12 security) are replaced by it. The problem analysis, filtering strategy, extraction, scoring and the test matrix below still apply.
 
 ---
 

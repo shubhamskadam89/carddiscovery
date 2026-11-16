@@ -1,0 +1,699 @@
+<title>Card Discovery Flow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; a system map up top, then each stage as a left-to-right flow
+   that stacks vertically on phones, with a "what the card knows now" strip after each stage. */
+:root {
+  --bg: #f3f5f7; --surface: #ffffff; --fg: #121820; --muted: #576170; --line: #d3d9e1;
+  --accent: #0d7468; --accent-soft: #dff1ee;
+  --phone: #0d7468;  --phone-t: #e2f3f0;
+  --server: #4a4fc0; --server-t: #e9eafb;
+  --data: #a8660a;   --data-t: #fbf0dd;
+  --google: #2c67c9; --google-t: #e3edfb;
+  --rules: #9b3d72;  --rules-t: #f7e6ef;
+  --stop: #b23a3a;   --stop-t: #f9e5e5;
+  --f-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1418; --surface: #171e24; --fg: #e5eaef; --muted: #98a3b0; --line: #2c3640;
+  --accent: #4cc3b2; --accent-soft: #173a36;
+  --phone: #4cc3b2;  --phone-t: #163632;
+  --server: #9a9ef5; --server-t: #23254a;
+  --data: #e3a64a;   --data-t: #3a2c14;
+  --google: #78a8f2; --google-t: #192c48;
+  --rules: #e08ab8;  --rules-t: #3d1f30;
+  --stop: #ec8080;   --stop-t: #3e1d1d;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0f1418; --surface: #171e24; --fg: #e5eaef; --muted: #98a3b0; --line: #2c3640;
+  --accent: #4cc3b2; --accent-soft: #173a36;
+  --phone: #4cc3b2;  --phone-t: #163632;
+  --server: #9a9ef5; --server-t: #23254a;
+  --data: #e3a64a;   --data-t: #3a2c14;
+  --google: #78a8f2; --google-t: #192c48;
+  --rules: #e08ab8;  --rules-t: #3d1f30;
+  --stop: #ec8080;   --stop-t: #3e1d1d;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(28px, 4.2vw, 40px); line-height: 1.1; }
+h2 { font-size: 24px; line-height: 1.2; }
+h3 { font-size: 15px; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 16px; margin-top: 12px; }
+.mono { font-family: var(--f-mono); font-size: 12px; }
+.eyebrow { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+
+header.top { display: flex; flex-direction: column; gap: 18px; margin-bottom: 36px; }
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--surface); }
+.toggle button { font: 500 13px var(--f-body); color: var(--muted); background: none; border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+.toggle button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+.toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+
+/* zone colour helpers */
+.k-phone  { --c: var(--phone);  --t: var(--phone-t); }
+.k-server { --c: var(--server); --t: var(--server-t); }
+.k-data   { --c: var(--data);   --t: var(--data-t); }
+.k-google { --c: var(--google); --t: var(--google-t); }
+.k-rules  { --c: var(--rules);  --t: var(--rules-t); }
+.k-stop   { --c: var(--stop);   --t: var(--stop-t); }
+.legend i { border-color: var(--c); background: var(--t); }
+
+/* ---------- system map ---------- */
+.map { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 56px; }
+.map figcaption { color: var(--muted); font-size: 13.5px; margin-top: 12px; max-width: 80ch; }
+.scroll-x { overflow-x: auto; }
+.map svg { display: block; width: 100%; min-width: 720px; height: auto; color: var(--fg); }
+svg text { font-family: var(--f-body); fill: currentColor; }
+svg .zt { font-family: var(--f-display); font-weight: 600; font-size: 14px; }
+svg .sm { font-size: 11.5px; fill: var(--muted); }
+svg .lab { font-size: 11px; fill: var(--muted); }
+svg .units { font-family: var(--f-mono); font-size: 10.5px; fill: var(--data); }
+svg .z { stroke-width: 1.5; }
+svg .z.k-phone  { fill: var(--phone-t);  stroke: var(--phone); }
+svg .z.k-server { fill: var(--server-t); stroke: var(--server); }
+svg .z.k-data   { fill: var(--data-t);   stroke: var(--data); }
+svg .z.k-google { fill: var(--google-t); stroke: var(--google); }
+svg .z.k-rules  { fill: var(--rules-t);  stroke: var(--rules); }
+svg .in { fill: var(--surface); stroke: var(--line); }
+svg .ar { stroke: currentColor; stroke-width: 1.4; fill: none; opacity: .75; }
+svg .badge circle { fill: var(--accent); }
+svg .badge text { fill: var(--surface); font: 700 11px var(--f-display); }
+
+/* ---------- stages ---------- */
+.stage { display: flex; flex-direction: column; gap: 18px; padding-block: 36px; border-top: 1px solid var(--line); }
+.stage-head { display: flex; gap: 14px; align-items: flex-start; }
+.num { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--surface);
+  font: 700 15px var(--f-display); display: grid; place-items: center; }
+.stage-head > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cost { font-family: var(--f-mono); font-size: 12px; color: var(--data); }
+
+/* flow: node → edge → node; row on wide screens, column on phones */
+.flow { display: flex; align-items: stretch; }
+.node { flex: 1 1 0; min-width: 0; background: var(--t); border: 1.5px solid var(--c); border-radius: 10px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
+.node b { font: 600 13.5px/1.25 var(--f-display); }
+.node span { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.node .tech { font-family: var(--f-mono); font-size: 11px; color: var(--c); margin-top: auto; padding-top: 6px; }
+.node.reject { border-style: dashed; }
+.edge { flex: 0 0 64px; position: relative; display: flex; align-items: center; justify-content: center; }
+.edge::before { content: ""; position: absolute; left: 6px; right: 10px; top: 50%; border-top: 1.5px solid var(--muted); }
+.edge::after { content: ""; position: absolute; right: 4px; top: calc(50% - 5px); border: 5px solid transparent; border-left: 7px solid var(--muted); border-right: 0; }
+.edge em { position: relative; z-index: 1; font-style: normal; font-size: 10.5px; line-height: 1.2; text-align: center;
+  color: var(--muted); background: var(--bg); padding: 1px 3px; transform: translateY(-14px); max-width: 60px; }
+.edge em.u { font-family: var(--f-mono); color: var(--data); }
+
+@media (max-width: 760px) {
+  .flow { flex-direction: column; }
+  .edge { flex: 0 0 40px; }
+  .edge::before { left: 22px; right: auto; top: 4px; bottom: 10px; border-top: 0; border-left: 1.5px solid var(--muted); }
+  .edge::after { left: 17px; right: auto; top: auto; bottom: 3px; border: 5px solid transparent; border-top: 7px solid var(--muted); border-bottom: 0; }
+  .edge { justify-content: flex-start; padding-left: 36px; }
+  .edge em { transform: none; max-width: none; text-align: left; background: none; }
+}
+
+.why { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 28px; }
+.why p { font-size: 14px; }
+.why p strong { font-weight: 600; }
+
+/* what the card knows now */
+.knows { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.knows .eyebrow { margin-right: 4px; }
+.chip { font-size: 12px; border-radius: 999px; padding: 3px 10px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
+.chip.new { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); font-weight: 500; }
+
+.subflow { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.subflow .edge em { background: var(--surface); }
+
+/* card growth strip */
+.growth { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; }
+.pcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.pcard .face { border-radius: 8px; padding: 10px; background: linear-gradient(135deg, var(--server-t), var(--phone-t)); border: 1px solid var(--line);
+  font-family: var(--f-mono); font-size: 11.5px; display: flex; flex-direction: column; gap: 2px; min-height: 92px; }
+.pcard .face .bank { font: 600 12.5px var(--f-display); }
+.pcard .face .ghost { color: var(--muted); opacity: .6; }
+.pcard .face .add { color: var(--accent); font-weight: 500; }
+.pcard p { font-size: 12.5px; color: var(--muted); }
+
+/* smarter loop */
+.loop svg { width: 100%; max-width: 760px; height: auto; display: block; margin: 0 auto; color: var(--fg); }
+
+.kept { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.box { border: 1.5px solid var(--c); background: var(--t); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.box ul { margin: 0; padding-left: 18px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
+
+.bars { display: flex; flex-direction: column; gap: 8px; }
+.bar-row { display: grid; grid-template-columns: minmax(120px, 210px) 1fr auto; gap: 12px; align-items: center; font-size: 13px; }
+.bar-row.gap { margin-top: 10px; }
+.bar-lab { color: var(--muted); }
+.bar-track { height: 14px; background: var(--bg); border-radius: 4px; overflow: hidden; min-width: 0; }
+.bar { height: 100%; background: var(--accent); border-radius: 4px; }
+.bar.old { background: var(--data); opacity: .7; }
+@media (max-width: 520px) { .bar-row { grid-template-columns: 1fr auto; } .bar-track { grid-column: 1 / -1; grid-row: 2; } }
+[data-mode="mini"] .tech[data-mini] { color: var(--accent); }
+@media (prefers-reduced-motion: no-preference) { .tech { transition: color .2s; } }
+</style>
+
+<div class="wrap" id="root" data-mode="prod">
+
+<header class="top">
+  <div>
+    <div class="eyebrow">Card Discovery · architecture v2</div>
+    <h1>How a card goes from a bank email to the app</h1>
+    <p class="lede">Each stage below shows what runs, which technology does it, why it helps, and what the card record knows after that stage. Switch to the mini version to see what stands in for each piece on one machine.</p>
+  </div>
+  <div class="controls">
+    <div class="toggle" role="group" aria-label="Show technology for">
+      <button type="button" id="btn-prod" aria-pressed="true">Production</button>
+      <button type="button" id="btn-mini" aria-pressed="false">Mini version</button>
+    </div>
+    <div class="legend">
+      <span class="k-phone"><i></i>Phone app</span>
+      <span class="k-server"><i></i>Our server</span>
+      <span class="k-data"><i></i>Postgres</span>
+      <span class="k-google"><i></i>Google</span>
+      <span class="k-rules"><i></i>Rules and AI</span>
+      <span class="k-stop"><i></i>Rejected</span>
+    </div>
+  </div>
+</header>
+
+<!-- ================= SYSTEM MAP ================= -->
+<figure class="map" style="margin-inline:0">
+  <div class="scroll-x">
+  <svg viewBox="0 0 900 640" role="img" aria-label="System map: the phone talks only to our API and to Google's consent screen; the API stores an encrypted token and queues jobs in Postgres; workers claim jobs, decrypt the token, call the Gmail API within a unit budget, and write cards back for the phone to show.">
+    <defs>
+      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <!-- phone -->
+    <rect class="z k-phone" x="40" y="20" width="600" height="84" rx="12"/>
+    <text class="zt" x="58" y="44">Phone app</text>
+    <text class="sm" x="58" y="64">OTP login · card picker · Connect Gmail · live progress · Yes/No review · disconnect</text>
+    <text class="sm" x="58" y="84">Holds only an app session. Never holds the Gmail token or email text.</text>
+
+    <!-- API -->
+    <rect class="z k-server" x="40" y="168" width="600" height="72" rx="12"/>
+    <text class="zt" x="58" y="192">API service</text>
+    <text class="sm" x="58" y="212">OTP, catalogue, /gmail/connect, status, cards, decisions</text>
+    <text class="sm" x="58" y="229">Can store a token but cannot decrypt it</text>
+
+    <!-- Postgres -->
+    <rect class="z k-data" x="40" y="300" width="600" height="112" rx="12"/>
+    <text class="zt" x="58" y="322">Postgres</text>
+    <rect class="in" x="56" y="334" width="130" height="64" rx="8"/>
+    <text x="121" y="360" text-anchor="middle" font-size="12.5" font-weight="600">cards</text>
+    <text class="sm" x="121" y="378" text-anchor="middle">picker + gmail</text>
+    <rect class="in" x="198" y="334" width="130" height="64" rx="8"/>
+    <text x="263" y="360" text-anchor="middle" font-size="12.5" font-weight="600">evidence</text>
+    <text class="sm" x="263" y="378" text-anchor="middle">facts, no text</text>
+    <rect class="in" x="340" y="334" width="130" height="64" rx="8"/>
+    <text x="405" y="360" text-anchor="middle" font-size="12.5" font-weight="600">token vault</text>
+    <text class="sm" x="405" y="378" text-anchor="middle">KMS-encrypted</text>
+    <rect class="in" x="482" y="334" width="142" height="64" rx="8"/>
+    <text x="553" y="360" text-anchor="middle" font-size="12.5" font-weight="600">jobs queue</text>
+    <text class="sm" x="553" y="378" text-anchor="middle">SKIP LOCKED</text>
+
+    <!-- workers + cron -->
+    <rect class="z k-server" x="40" y="470" width="430" height="84" rx="12"/>
+    <text class="zt" x="58" y="494">Workers</text>
+    <text class="sm" x="58" y="514">discovery engine · PDF module · unit limiter</text>
+    <text class="sm" x="58" y="532">Email text lives only in memory here</text>
+    <rect class="z k-server" x="490" y="470" width="150" height="84" rx="12"/>
+    <text class="zt" x="506" y="494">Cron</text>
+    <text class="sm" x="506" y="514">daily sync,</text>
+    <text class="sm" x="506" y="530">token checks, cleanup</text>
+
+    <!-- rules -->
+    <rect class="z k-rules" x="40" y="590" width="430" height="40" rx="10"/>
+    <text class="zt" x="58" y="615" font-size="13">Rules bundle + AI for the long tail</text>
+
+    <!-- google -->
+    <rect class="z k-google" x="720" y="20" width="160" height="534" rx="12"/>
+    <text class="zt" x="738" y="44">Google</text>
+    <rect class="in" x="734" y="56" width="132" height="40" rx="8"/>
+    <text x="800" y="81" text-anchor="middle" font-size="12">Consent screen</text>
+    <rect class="in" x="734" y="184" width="132" height="40" rx="8"/>
+    <text x="800" y="209" text-anchor="middle" font-size="12">Token endpoint</text>
+    <rect class="in" x="734" y="492" width="132" height="40" rx="8"/>
+    <text x="800" y="517" text-anchor="middle" font-size="12">Gmail API</text>
+
+    <!-- arrows -->
+    <path class="ar" d="M640 76 H732" marker-end="url(#ah)"/>
+    <text class="lab" x="686" y="68" text-anchor="middle">consent</text>
+
+    <path class="ar" d="M240 104 V166" marker-end="url(#ah)"/>
+    <text class="lab" x="248" y="132">one-time code,</text>
+    <text class="lab" x="248" y="146">picks, Yes/No</text>
+    <path class="ar" d="M120 166 V106" marker-end="url(#ah)"/>
+    <text class="lab" x="128" y="132">live cards,</text>
+    <text class="lab" x="128" y="146">progress</text>
+
+    <path class="ar" d="M640 204 H732" marker-end="url(#ah)" marker-start="url(#ah)"/>
+    <text class="lab" x="686" y="196" text-anchor="middle">exchange</text>
+
+    <path class="ar" d="M405 240 V332" marker-end="url(#ah)"/>
+    <text class="lab" x="413" y="282">encrypt</text>
+    <text class="lab" x="413" y="296">+ store</text>
+    <path class="ar" d="M553 240 V332" marker-end="url(#ah)"/>
+    <text class="lab" x="561" y="282">enqueue</text>
+    <text class="lab" x="561" y="296">job</text>
+    <path class="ar" d="M121 332 V242" marker-end="url(#ah)"/>
+    <text class="lab" x="129" y="282">read</text>
+    <text class="lab" x="129" y="296">cards</text>
+
+    <path class="ar" d="M520 400 L440 468" marker-end="url(#ah)"/>
+    <text class="lab" x="486" y="446" text-anchor="end">claim</text>
+    <path class="ar" d="M565 468 V400" marker-end="url(#ah)"/>
+    <text class="lab" x="573" y="442">schedule</text>
+    <path class="ar" d="M405 400 V468" marker-end="url(#ah)"/>
+    <text class="lab" x="398" y="442" text-anchor="end">decrypt</text>
+    <path class="ar" d="M263 468 V400" marker-end="url(#ah)" marker-start="url(#ah)"/>
+    <text class="lab" x="271" y="442">skip read mail</text>
+    <path class="ar" d="M121 468 V400" marker-end="url(#ah)"/>
+    <text class="lab" x="129" y="442">write cards</text>
+
+    <path class="ar" d="M470 512 H732" marker-end="url(#ah)" marker-start="url(#ah)"/>
+    <text class="lab" x="600" y="504" text-anchor="middle">search, read, PDFs</text>
+    <text class="units" x="600" y="574" text-anchor="middle">≤ 5,500 units / min per user</text>
+    <path d="M600 520 V562" stroke="var(--data)" stroke-dasharray="3 3" fill="none"/>
+
+    <path class="ar" d="M255 590 V556" marker-end="url(#ah)"/>
+    <text class="lab" x="263" y="578">signed rules</text>
+
+    <!-- stage badges -->
+    <g class="badge"><circle cx="40" cy="20" r="11"/><text x="40" y="24" text-anchor="middle">1</text></g>
+    <g class="badge"><circle cx="686" cy="90" r="11"/><text x="686" y="94" text-anchor="middle">2</text></g>
+    <g class="badge"><circle cx="553" cy="252" r="11"/><text x="553" y="256" text-anchor="middle">3</text></g>
+    <g class="badge"><circle cx="40" cy="470" r="11"/><text x="40" y="474" text-anchor="middle">4</text></g>
+    <g class="badge"><circle cx="490" cy="470" r="11"/><text x="490" y="474" text-anchor="middle">7</text></g>
+    <g class="badge"><circle cx="40" cy="590" r="11"/><text x="40" y="594" text-anchor="middle">8</text></g>
+  </svg>
+  </div>
+  <figcaption>The phone only ever talks to our API and to Google's consent screen. Everything that touches Gmail happens in the workers, using a token only they can decrypt, and every Gmail call is paid for in quota units before it is sent. Numbers mark the stages below.</figcaption>
+</figure>
+
+<!-- ================= STAGES ================= -->
+
+<section class="stage" id="s1">
+  <div class="stage-head"><div class="num">1</div><div>
+    <h2>Sign in and pick cards</h2>
+    <p>The user can add every card by hand, with no Gmail at all. This is the main path; Gmail only makes it faster and deeper.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-phone"><b>Phone number</b><span>user types it</span></div>
+    <div class="edge"><em>send</em></div>
+    <div class="node k-server"><b>SMS OTP</b><span>5 min expiry, 5 tries, 30 s resend</span><span class="tech" data-prod="DLT SMS provider" data-mini="console prints [DEV OTP]">DLT SMS provider</span></div>
+    <div class="edge"><em>verify</em></div>
+    <div class="node k-data"><b>Session</b><span>OTP and session stored as hashes</span><span class="tech" data-prod="Postgres accounts" data-mini="local Postgres">Postgres accounts</span></div>
+    <div class="edge"><em>open</em></div>
+    <div class="node k-phone"><b>Card picker</b><span>bank → card → network (only if it has more than one)</span></div>
+    <div class="edge"><em>save</em></div>
+    <div class="node k-data"><b>cards</b><span>source = manual</span></div>
+  </div>
+  <div class="why">
+    <p><strong>Why it helps.</strong> Works on day one for every user, before Google approves our app, and needs no permission beyond a phone number.</p>
+    <p><strong>Security.</strong> A leaked database never reveals a valid OTP or session, because only hashes are kept.</p>
+  </div>
+  <div class="knows"><span class="eyebrow">Card knows</span><span class="chip new">bank</span><span class="chip new">product</span><span class="chip new">network</span><span class="chip">last 4 (optional)</span></div>
+</section>
+
+<section class="stage" id="s2">
+  <div class="stage-head"><div class="num">2</div><div>
+    <h2>Connect Gmail</h2>
+    <p>The phone gets a one-time code from Google and hands it to our server. The long-lived token is created on the server and encrypted before it is stored.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-phone"><b>Explainer</b><span>which banks, how many years, optional "read statement PDFs"</span></div>
+    <div class="edge"><em>tap Connect</em></div>
+    <div class="node k-google"><b>Google consent</b><span>gmail.readonly, offline access</span><span class="tech" data-prod="Google Sign-In SDK" data-mini="web consent redirect">Google Sign-In SDK</span></div>
+    <div class="edge"><em>one-time code</em></div>
+    <div class="node k-server"><b>/gmail/connect</b><span>exchanges code, checks the scope was really granted</span></div>
+    <div class="edge"><em>refresh token</em></div>
+    <div class="node k-server"><b>Envelope encrypt</b><span>new data key per token</span><span class="tech" data-prod="AWS KMS + AES-GCM" data-mini="local key file + AES-GCM">AWS KMS + AES-GCM</span></div>
+    <div class="edge"><em>store</em></div>
+    <div class="node k-data"><b>Token vault</b><span>only workers may decrypt</span></div>
+  </div>
+  <div class="why">
+    <p><strong>Why it helps.</strong> The server can sync every day even when the phone is off, and a stolen phone never exposes Gmail access.</p>
+    <p><strong>Security.</strong> The API can write tokens but not read them. Every decrypt is logged. The user can untick the Gmail box on Google's screen, so we check the granted scope before going further.</p>
+  </div>
+</section>
+
+<section class="stage" id="s3">
+  <div class="stage-head"><div class="num">3</div><div>
+    <h2>Queue the work and pace it</h2>
+    <p>Every piece of Gmail work is a row in Postgres. Workers claim rows, and a limiter charges each Gmail call its quota cost before sending it.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-data"><b>jobs row</b><span>kind, user, progress; never email content</span><span class="tech" data-prod="Postgres (RDS)" data-mini="local Postgres">Postgres (RDS)</span></div>
+    <div class="edge"><em>claim</em></div>
+    <div class="node k-server"><b>Worker</b><span>FOR UPDATE SKIP LOCKED, so two workers never take the same job</span><span class="tech" data-prod="EC2 workers" data-mini="1–2 local processes">EC2 workers</span></div>
+    <div class="edge"><em>each call</em></div>
+    <div class="node k-server"><b>Unit limiter</b><span>5,500 units/min per user, under Google's 6,000</span></div>
+    <div class="edge"><em>within</em></div>
+    <div class="node k-server"><b>Job budget</b><span>quick 1,000 · full 15,000 · daily 500 · PDF 80</span></div>
+    <div class="edge"><em>out of budget</em></div>
+    <div class="node k-data"><b>Save place, requeue</b><span>resumes later from where it stopped</span></div>
+  </div>
+  <div class="why">
+    <p><strong>Why it helps.</strong> One database is both store and queue, so there is no extra service to run. A crashed or cut-off job is retried and picks up where it left off.</p>
+    <p><strong>Quota.</strong> A project-wide meter watches the 80M units/day limit, alerts at 60% and 80%, and above 90% delays the slow background jobs while new users still get their quick scan.</p>
+  </div>
+</section>
+
+<section class="stage" id="s4">
+  <div class="stage-head"><div class="num">4</div><div>
+    <h2>Quick discovery</h2>
+    <p class="cost">about 1,000 units · first card in under 5 s · done in about 10 s</p>
+    <p>A fast first look: the last 12 months, the email types that prove a card exists, and about 40 emails spread across banks.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-google"><b>~15 searches</b><span>statements, welcome/dispatch, fee, upgrade, closure</span></div>
+    <div class="edge"><em class="u">5 units each</em></div>
+    <div class="node k-server"><b>Pick ~40 emails</b><span>round-robin by bank, skip numbers already seen</span></div>
+    <div class="edge"><em class="u">20 units each</em></div>
+    <div class="node k-google"><b>Header + preview</b><span>no full emails, no PDFs</span></div>
+    <div class="edge"><em>each email</em></div>
+    <div class="node k-server"><b>Engine</b><span>see the pipeline below</span><span class="tech" data-prod="POC package, unchanged" data-mini="POC package, unchanged">POC package, unchanged</span></div>
+    <div class="edge"><em>stream</em></div>
+    <div class="node k-phone"><b>Card appears</b><span>as soon as it reaches "owned" or "confirm"</span></div>
+  </div>
+
+  <div class="subflow">
+    <div class="eyebrow">Inside the engine: one email</div>
+    <div class="flow">
+      <div class="node k-rules"><b>Is it a bank?</b><span>sender registry + Gmail's own DKIM result</span></div>
+      <div class="edge"><em>yes</em></div>
+      <div class="node k-server"><b>Blank full numbers</b><span>before any other step sees the text</span></div>
+      <div class="edge"><em></em></div>
+      <div class="node k-rules"><b>Classify</b><span>statement, welcome, closure, offer, debit, OTP…</span></div>
+      <div class="edge"><em></em></div>
+      <div class="node k-rules"><b>Extract</b><span>last 4, product, name on card, add-on</span></div>
+      <div class="edge"><em></em></div>
+      <div class="node k-server"><b>Resolve</b><span>same card = user + bank + last 4</span></div>
+      <div class="edge"><em></em></div>
+      <div class="node k-server"><b>Score + explain</b><span>evidence adds up; a plain-words reason</span></div>
+    </div>
+    <div class="flow">
+      <div class="node k-stop reject"><b>Thrown out on the way</b><span>promotions and pre-approved offers · rejected applications · forwarded mail · someone else's name · debit cards · OTPs · forged senders</span></div>
+    </div>
+  </div>
+
+  <div class="why">
+    <p><strong>Why it helps.</strong> The user sees real cards within seconds of granting access, which is the moment they decide whether the feature is worth it.</p>
+    <p><strong>What it can miss.</strong> A second card at the same bank, or a dormant card with no important mail this year. Stage 5 finds those.</p>
+  </div>
+  <div class="knows"><span class="eyebrow">Card knows</span><span class="chip">bank</span><span class="chip">product</span><span class="chip new">last 4</span><span class="chip new">status: owned / confirm</span><span class="chip new">why we think so</span><span class="chip new">source = gmail</span></div>
+</section>
+
+<section class="stage" id="s5">
+  <div class="stage-head"><div class="num">5</div><div>
+    <h2>Full discovery</h2>
+    <p class="cost">budget 15,000 units · about 1–3 min in the background</p>
+    <p>Three years of history, read cheaply: headers first, full emails only when the header is not enough.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-google"><b>3-year searches</b><span>statements, lifecycle, applications</span></div>
+    <div class="edge"><em>plus</em></div>
+    <div class="node k-google"><b>Sampled alerts</b><span>last 12 months only</span></div>
+    <div class="edge"><em>plus</em></div>
+    <div class="node k-google"><b>Tight catch-all</b><span>no Promotions tab, max ~200</span></div>
+    <div class="edge"><em>skip if</em></div>
+    <div class="node k-data"><b>Already read?</b><span>evidence table</span></div>
+    <div class="edge"><em class="u">20 units</em></div>
+    <div class="node k-google"><b>Header read</b><span>enough for most mail</span></div>
+    <div class="edge"><em class="u">60 only if needed</em></div>
+    <div class="node k-google"><b>Full read</b><span>no number or product in the header</span></div>
+  </div>
+  <div class="why">
+    <p><strong>Why it helps.</strong> History is what reveals dormant, closed and upgraded cards. Reading headers first and skipping promotions cuts a heavy inbox from about 49,000 units to about 10,000.</p>
+    <p><strong>Rules it follows.</strong> Silence means dormant, never closed: only a closure email closes a card. An upgrade links the old card to the new one instead of making a duplicate.</p>
+  </div>
+  <div class="knows"><span class="eyebrow">Card knows</span><span class="chip">last 4</span><span class="chip">status</span><span class="chip new">first and last seen</span><span class="chip new">dormant / closed</span><span class="chip new">upgraded from …</span><span class="chip new">other cards at this bank</span><span class="chip new">add-on cards</span></div>
+</section>
+
+<section class="stage" id="s6">
+  <div class="stage-head"><div class="num">6</div><div>
+    <h2>Statement PDFs</h2>
+    <p class="cost">opt-in · newest statement per card · 80 units per PDF (full read 60 + download 20)</p>
+    <p>The statement is the richest document a bank sends. It is opened in memory, read, checked, and discarded.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-google"><b>Download PDF</b><span>full read first for the attachment ID; size-capped</span><span class="tech" data-prod="attachments.get" data-mini="attachments.get">attachments.get</span></div>
+    <div class="edge"><em>in memory</em></div>
+    <div class="node k-rules"><b>Unlock</b><span>bank's password pattern from name + date of birth, else ask the user</span></div>
+    <div class="edge"><em></em></div>
+    <div class="node k-rules"><b>Bank parser</b><span>text layer, OCR if scanned</span><span class="tech" data-prod="pypdf + optional OCR" data-mini="pypdf">pypdf + optional OCR</span></div>
+    <div class="edge"><em>check</em></div>
+    <div class="node k-server"><b>Reconcile</b><span>do the lines add up to the stated total?</span></div>
+    <div class="edge"><em>pass</em></div>
+    <div class="node k-data"><b>statement_facts</b><span>totals only; the PDF is gone</span></div>
+  </div>
+  <div class="why">
+    <p><strong>Why it helps.</strong> Gives the reward platform the numbers it actually needs: limit, points and fees, straight from the bank's own document.</p>
+    <p><strong>Safety net.</strong> If the totals don't add up, the parse is marked unreliable and none of its fields are used, so a bad parser can't put wrong numbers in front of a user.</p>
+  </div>
+  <div class="knows"><span class="eyebrow">Card knows</span><span class="chip">status</span><span class="chip">history</span><span class="chip new">credit limit</span><span class="chip new">reward points</span><span class="chip new">fees</span><span class="chip new">statement date</span><span class="chip new">amount due</span></div>
+</section>
+
+<section class="stage" id="s7">
+  <div class="stage-head"><div class="num">7</div><div>
+    <h2>Daily sync</h2>
+    <p class="cost">about 50–150 units per user per day</p>
+    <p>Once the first scan is done, keeping up costs one search a day plus a read for each new bank email.</p>
+  </div></div>
+  <div class="flow">
+    <div class="node k-server"><b>Cron</b><span>spreads users across the day; also on app open after 12 h</span><span class="tech" data-prod="cron on EC2" data-mini="scheduler process">cron on EC2</span></div>
+    <div class="edge"><em class="u">5 units</em></div>
+    <div class="node k-google"><b>One search</b><span>bank senders, after last sync − 1 day</span></div>
+    <div class="edge"><em>new only</em></div>
+    <div class="node k-google"><b>Read new bank mail</b><span>header first, full only if needed</span></div>
+    <div class="edge"><em></em></div>
+    <div class="node k-server"><b>Engine</b><span>same pipeline as stage 4</span></div>
+    <div class="edge"><em>result</em></div>
+    <div class="node k-phone"><b>Banner</b><span>"New card found: add it?" or quiet update</span><span class="tech" data-prod="push notification (optional)" data-mini="in-app banner">push notification (optional)</span></div>
+  </div>
+  <div class="flow">
+    <div class="node k-stop reject"><b>Token refresh fails</b><span>revoked, expired, or the 7-day testing limit → connection marked "needs reconnect" → the app shows a reconnect banner; saved cards stay</span></div>
+  </div>
+  <div class="why">
+    <p><strong>Why it helps.</strong> New cards, closures, upgrades and the latest statement show up without the user doing anything. Using the token daily also keeps it from expiring after 6 months unused.</p>
+    <p><strong>Why search and not Gmail history.</strong> History lists every new email, personal mail included, and each costs a 20-unit read to inspect. A search by bank sender returns only bank mail.</p>
+  </div>
+  <div class="knows"><span class="eyebrow">Card knows</span><span class="chip new">always current</span><span class="chip new">new cards as they arrive</span><span class="chip new">latest statement</span></div>
+</section>
+
+<!-- ================= SPENDING FEWER UNITS ================= -->
+<section class="stage" id="save">
+  <div class="stage-head"><div class="num" aria-hidden="true">↓</div><div>
+    <h2>Spending fewer units</h2>
+    <p>Each layer of Gmail data costs more than the one above it. The rule: go down a layer only when the cheaper one can't answer the question, and make search, the cheapest layer, do as much of the thinking as it can.</p>
+  </div></div>
+
+  <div class="subflow">
+    <div class="eyebrow">The four layers</div>
+    <div class="flow">
+      <div class="node k-google"><b>Search</b><span>message IDs and a rough count; the answer is whatever the query asked</span><span class="tech">5 units</span></div>
+      <div class="edge"><em>need the card?</em></div>
+      <div class="node k-google"><b>Header read</b><span>sender, subject, date, DKIM, labels, ~200-char preview</span><span class="tech">20 units</span></div>
+      <div class="edge"><em>no last 4 or product?</em></div>
+      <div class="node k-google"><b>Full read</b><span>whole email, add-ons, amounts, attachment IDs</span><span class="tech">60 units</span></div>
+      <div class="edge"><em>need limit or points?</em></div>
+      <div class="node k-google"><b>Statement PDF</b><span>needs the full read first, for the attachment ID</span><span class="tech">60 + 20 = 80 units</span></div>
+    </div>
+  </div>
+
+  <div class="subflow">
+    <div class="eyebrow">Search by last 4: one read, then searches answer the rest</div>
+    <div class="flow">
+      <div class="node k-google"><b>1 header read</b><span>finds HDFC •••• 2846</span><span class="tech">20 units</span></div>
+      <div class="edge"><em class="u">5</em></div>
+      <div class="node k-google"><b>from:hdfc "2846"</b><span>how much mail this card has: its history</span></div>
+      <div class="edge"><em class="u">5</em></div>
+      <div class="node k-google"><b>… "2846" after:6 months ago</b><span>nothing back means likely dormant</span></div>
+      <div class="edge"><em class="u">5</em></div>
+      <div class="node k-google"><b>subject:statement -"2846"</b><span>statements for another HDFC card</span></div>
+    </div>
+    <div class="flow">
+      <div class="node k-stop reject"><b>To prove first</b><span>this works only if Gmail matches "2846" inside "XX2846". Test it on real Gmail with self-sent emails before relying on it.</span></div>
+    </div>
+  </div>
+
+  <div class="kept">
+    <div class="box k-google"><h3>Let search classify</h3><ul>
+      <li><span class="mono">has:attachment filename:pdf</span> proves a statement PDF exists, with no read</li>
+      <li><span class="mono">-category:promotions</span> and offer words drop ads before we pay for them</li>
+      <li>Exact sender address per email type: statements, alerts and offers come from different addresses</li></ul></div>
+    <div class="box k-rules"><h3>Know which layer each template needs</h3><ul>
+      <li>Record per bank template where the last 4 and product appear: subject, preview or body</li>
+      <li>Never pay 60 units when 20 is enough</li>
+      <li>Rule knowledge, not user data, so it is shared across all users</li></ul></div>
+    <div class="box k-server"><h3>Stop early, never pay twice</h3><ul>
+      <li>A card is confirmed and no other numbers show at that bank: stop reading that bank</li>
+      <li>Thread IDs, free in search results, skip replies and duplicates</li>
+      <li>The evidence table skips anything already read</li></ul></div>
+    <div class="box k-data"><h3>Cheaper PDFs</h3><ul>
+      <li>Only the newest statement per card: limit, points and due in one file</li>
+      <li>Skip the PDF when the statement email already gives the total and points</li>
+      <li>Older PDFs only if a feature needs history</li></ul></div>
+  </div>
+
+  <div class="subflow">
+    <div class="eyebrow">Rough effect (estimates, not measured)</div>
+    <div class="bars">
+      <div class="bar-row"><span class="bar-lab">Heavy 3-year scan, now</span><div class="bar-track"><div class="bar old" style="width:100%"></div></div><span class="mono">~10,000</span></div>
+      <div class="bar-row"><span class="bar-lab">… with these changes</span><div class="bar-track"><div class="bar" style="width:35%"></div></div><span class="mono">~3,000–4,000</span></div>
+      <div class="bar-row gap"><span class="bar-lab">PDFs per card, 6 months</span><div class="bar-track"><div class="bar old" style="width:100%"></div></div><span class="mono">~480</span></div>
+      <div class="bar-row"><span class="bar-lab">… newest only</span><div class="bar-track"><div class="bar" style="width:16.7%"></div></div><span class="mono">~80</span></div>
+    </div>
+    <p style="font-size:13.5px;color:var(--muted)">Each pair is drawn on its own scale, in Gmail units. At about 3,500 units, a full scan takes about 40 s, and the 10-second budget of 1,000 units could already find every card for most users.</p>
+  </div>
+</section>
+
+<!-- ================= ENRICHMENT ================= -->
+<section class="stage" id="growth">
+  <div class="stage-head"><div class="num" aria-hidden="true">+</div><div>
+    <h2>How one card record fills in</h2>
+    <p>The same card, as each stage adds to it. Highlighted lines are what that stage contributed.</p>
+  </div></div>
+  <div class="growth">
+    <div class="pcard"><div class="eyebrow">After stage 1</div>
+      <div class="face"><span class="bank add">HDFC Bank</span><span class="add">Millennia · Visa</span><span class="ghost">•••• ????</span><span class="ghost">status ?</span></div>
+      <p>The user picked it by hand.</p></div>
+    <div class="pcard"><div class="eyebrow">After stage 4</div>
+      <div class="face"><span class="bank">HDFC Bank</span><span>Millennia · Visa</span><span class="add">•••• 2846</span><span class="add">owned · 3 emails agree</span></div>
+      <p>A statement email matched the picked card.</p></div>
+    <div class="pcard"><div class="eyebrow">After stage 5</div>
+      <div class="face"><span class="bank">HDFC Bank</span><span>Millennia •••• 2846</span><span class="add">seen Jan 2024 – Nov 2026</span><span class="add">+ dormant Regalia •••• 1093</span></div>
+      <p>History found a second card nobody remembered.</p></div>
+    <div class="pcard"><div class="eyebrow">After stage 6</div>
+      <div class="face"><span class="bank">HDFC Bank</span><span>Millennia •••• 2846</span><span class="add">limit ₹1,50,000</span><span class="add">471 CashPoints · due ₹9,412</span></div>
+      <p>Numbers from the bank's own PDF, totals checked.</p></div>
+    <div class="pcard"><div class="eyebrow">Every day after</div>
+      <div class="face"><span class="bank">HDFC Bank</span><span>Millennia •••• 2846</span><span>limit ₹1,50,000</span><span class="add">Dec statement added</span></div>
+      <p>Daily sync keeps it fresh.</p></div>
+  </div>
+  <p class="mono" style="color:var(--muted)">Example values for illustration. Only bank, product and last 4 are ever stored as card identity; full numbers are blanked on sight.</p>
+</section>
+
+<!-- ================= SYSTEM GETS SMARTER ================= -->
+<section class="stage loop" id="s8">
+  <div class="stage-head"><div class="num">8</div><div>
+    <h2>How the system itself gets better</h2>
+    <p>Cards get richer per user; the rules get better across all users. Unknown formats are counted, new parsers are written and reviewed, and every worker picks them up from one signed bundle.</p>
+  </div></div>
+  <figure style="margin:0">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Improvement loop: an email no rule understands is redacted and sent to AI for a one-off answer and counted per bank; a developer drafts a new parser from synthetic examples with AI help; a human reviews it; it ships in a signed rules bundle to every worker; fewer emails are unknown next time. User Yes/No answers flag rules that mislead.">
+    <defs>
+      <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <rect class="z k-server" x="20" y="30" width="200" height="66" rx="10"/>
+    <text x="120" y="58" text-anchor="middle" font-weight="600" font-size="13">Email no rule understands</text>
+    <text class="sm" x="120" y="78" text-anchor="middle">rules return "unknown"</text>
+
+    <rect class="z k-rules" x="280" y="30" width="200" height="66" rx="10"/>
+    <text x="380" y="58" text-anchor="middle" font-weight="600" font-size="13">AI, redacted text</text>
+    <text class="sm" x="380" y="78" text-anchor="middle">one-off answer, checked word-for-word</text>
+
+    <rect class="z k-data" x="540" y="30" width="200" height="66" rx="10"/>
+    <text x="640" y="58" text-anchor="middle" font-weight="600" font-size="13">Count per bank format</text>
+    <text class="sm" x="640" y="78" text-anchor="middle">a number, never the email</text>
+
+    <rect class="z k-rules" x="540" y="234" width="200" height="66" rx="10"/>
+    <text x="640" y="262" text-anchor="middle" font-weight="600" font-size="13">Draft a new parser</text>
+    <text class="sm" x="640" y="282" text-anchor="middle">synthetic examples + AI, offline</text>
+
+    <rect class="z k-rules" x="280" y="234" width="200" height="66" rx="10"/>
+    <text x="380" y="262" text-anchor="middle" font-weight="600" font-size="13">Human review + test kits</text>
+    <text class="sm" x="380" y="282" text-anchor="middle">all regression emails must pass</text>
+
+    <rect class="z k-rules" x="20" y="234" width="200" height="66" rx="10"/>
+    <text x="120" y="262" text-anchor="middle" font-weight="600" font-size="13">Signed rules bundle</text>
+    <text class="sm" x="120" y="282" text-anchor="middle">Ed25519, every worker</text>
+
+    <path class="ar" d="M220 63 H278" marker-end="url(#ah2)"/>
+    <path class="ar" d="M480 63 H538" marker-end="url(#ah2)"/>
+    <path class="ar" d="M640 96 V232" marker-end="url(#ah2)"/>
+    <text class="lab" x="650" y="160">a format</text>
+    <text class="lab" x="650" y="174">keeps showing up</text>
+    <path class="ar" d="M540 267 H482" marker-end="url(#ah2)"/>
+    <path class="ar" d="M280 267 H222" marker-end="url(#ah2)"/>
+    <path class="ar" d="M120 234 V98" marker-end="url(#ah2)"/>
+    <text class="lab" x="130" y="160">next time it is</text>
+    <text class="lab" x="130" y="174">understood by rules</text>
+
+    <rect class="z k-phone" x="300" y="140" width="160" height="50" rx="10"/>
+    <text x="380" y="161" text-anchor="middle" font-weight="600" font-size="12.5">User says Yes / No</text>
+    <text class="sm" x="380" y="179" text-anchor="middle">flags a misleading rule</text>
+    <path class="ar" d="M380 190 V232" marker-end="url(#ah2)" stroke-dasharray="4 3"/>
+  </svg>
+  <figcaption style="color:var(--muted);font-size:13.5px;margin-top:10px;max-width:80ch">Over time more banks are handled by fixed rules, so AI calls fall and results become more predictable. User mail is never used to train a model; parsers are drafted from synthetic or consented examples.</figcaption>
+  </figure>
+  <div class="knows"><span class="eyebrow">AI tech</span><span class="chip tech" data-prod="model API, zero retention, off by default" data-mini="interface present, off by default">model API, zero retention, off by default</span></div>
+</section>
+
+<!-- ================= KEPT / NEVER ================= -->
+<section class="stage" id="leave">
+  <div class="stage-head"><div class="num" aria-hidden="true">−</div><div>
+    <h2>What stays, what never does, and leaving</h2>
+  </div></div>
+  <div class="kept">
+    <div class="box k-data"><h3>Kept in Postgres</h3><ul>
+      <li>Cards: bank, product, network, last 4 (what RBI allows)</li>
+      <li>Evidence per email: type, date, flags, no text</li>
+      <li>Statement totals: limit, points, fees, due</li>
+      <li>Encrypted Gmail token and your Yes/No answers</li></ul></div>
+    <div class="box k-stop"><h3>Never stored</h3><ul>
+      <li>Email text, HTML or PDFs (worker memory only)</li>
+      <li>Full card numbers (blanked on sight)</li>
+      <li>OTP codes or Google passwords in plain text</li>
+      <li>Anything for ads, lending or model training</li></ul></div>
+    <div class="box k-server"><h3>Disconnect</h3>
+      <div class="flow">
+        <div class="node k-google"><b>Revoke</b><span>at Google</span></div>
+        <div class="edge"><em></em></div>
+        <div class="node k-data"><b>Delete</b><span>token, evidence, Gmail cards</span></div>
+        <div class="edge"><em></em></div>
+        <div class="node k-server"><b>Cancel</b><span>running jobs stop</span></div>
+      </div></div>
+  </div>
+</section>
+
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById('root');
+  var bProd = document.getElementById('btn-prod');
+  var bMini = document.getElementById('btn-mini');
+  function set(mode) {
+    root.setAttribute('data-mode', mode);
+    bProd.setAttribute('aria-pressed', mode === 'prod');
+    bMini.setAttribute('aria-pressed', mode === 'mini');
+    document.querySelectorAll('.tech[data-prod]').forEach(function (el) {
+      el.textContent = mode === 'mini' ? el.getAttribute('data-mini') : el.getAttribute('data-prod');
+    });
+    try { localStorage.setItem('cd-mode', mode); } catch (e) {}
+  }
+  bProd.addEventListener('click', function () { set('prod'); });
+  bMini.addEventListener('click', function () { set('mini'); });
+  try { var m = localStorage.getItem('cd-mode'); if (m === 'mini') set('mini'); } catch (e) {}
+})();
+</script>

@@ -22,6 +22,7 @@ class Query:
     after: date | None = None
     before: date | None = None
     max_results: int | None = None  # None = all pages
+    extra: tuple[str, ...] = ()  # raw Gmail operators, e.g. "-category:promotions", "has:attachment"
 
     def to_gmail(self) -> str:
         parts = ["from:(" + " OR ".join(self.senders) + ")"]
@@ -35,6 +36,7 @@ class Query:
             parts.append(f"after:{self.after:%Y/%m/%d}")
         if self.before:
             parts.append(f"before:{self.before:%Y/%m/%d}")
+        parts.extend(self.extra)
         return " ".join(parts)
 
 

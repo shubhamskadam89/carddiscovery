@@ -132,3 +132,28 @@ The tests cover the design doc's scenario matrix, the four test-email sets (clea
 ## Not in this POC
 
 Mobile app · AI fallback for emails the rules miss · Outlook · Android SMS · background refresh · backend API. See [docs/mobile-design.md](docs/mobile-design.md) for the plan.
+
+
+## Mini server (`cdserver`)
+
+The server-side version from [docs/architecture.md](docs/architecture.md) §13, on one machine:
+API, workers claiming jobs from a Postgres queue, a scheduler, encrypted Gmail tokens, Gmail
+quota metering and statement PDFs. Login is a separate service; `/api/dev/login` stands in for it.
+
+```bash
+pip install -e ".[dev,server]"
+createdb carddiscovery                       # the Mac's default Postgres on localhost:5432
+python -m cdserver dev --name "Your Name"     # API on 127.0.0.1:8790 + 2 workers + scheduler
+python -m cdserver jobs                      # what each job cost: units, time, CPU, memory
+python -m cdserver monitor                   # memory and CPU of every process, until Ctrl+C
+```
+
+Simulated 10,000-email inbox for end-to-end tests on real Gmail (nothing is sent; emails are
+imported into a test inbox you own):
+
+```bash
+python -m cdserver sim dryrun                # offline run of the same scan code
+python -m cdserver sim import --to you@example.com
+python -m cdserver evaluate --mailbox you@example.com   # after connecting it in the app
+python -m cdserver sim clean --to you@example.com       # moves the simulated mail to Trash
+```
