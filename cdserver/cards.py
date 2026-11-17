@@ -11,6 +11,7 @@ from carddiscovery.registry import Registry
 from carddiscovery.resolve import resolve
 from carddiscovery.score import group, score_all
 
+from . import trust
 from .engine import EvidenceStore
 
 GROUPS = ["owned", "review", "history", "rejected"]
@@ -18,7 +19,10 @@ GROUPS = ["owned", "review", "history", "rejected"]
 
 def rebuild(c, account_id: int, registry: Registry) -> dict:
     """Replace the account's gmail cards. Returns {"new": [keys], "apps": [...]}."""
-    evs = list(EvidenceStore(c, account_id).known().values())
+    stored = list(EvidenceStore(c, account_id).known().values())
+    evs, rejected = trust.split_verified(stored)      # 1. only Gmail-verified bank mail counts
+    known = trust.known_senders(evs)                    # 2. sender history
+    evs, dropped = trust.corroborate(evs)               # 4. big status changes need follow-up
     cards, apps = resolve(evs)
     score_all(cards, datetime.now(timezone.utc))
     answers = {r["card_key"]: r["decision"] for r in
@@ -34,7 +38,11 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
             continue
         e = explain(card, registry)
         g = group(card)
-        view = {"key": card.decision_key, "title": e.title, "status": e.status, "headline": e.headline,
+        status_label, headline = e.status, e.headline
+        if g in ("owned", "review") and card.decision != "yes" and not trust.confirmed(card, known):  # 3. confirmation
+            g, status_label = "review", "New, waiting to confirm"
+            headline = "Seen in one verified bank email so far; it's confirmed when more of its mail arrives."
+        view = {"key": card.decision_key, "title": e.title, "status": status_label, "headline": headline,
                 "evidence": e.evidence, "concerns": e.concerns, "question": e.question,
                 "decision": card.decision, "bank": card.bank_id, "last4": card.last4, "product": card.product,
                 "group": g, "first_seen": card.first_seen.isoformat() if card.first_seen else None,
@@ -48,7 +56,8 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
     new = [r[1] for r in rows if r[1] not in before and r[5] in ("owned", "review")]
     app_view = [{"bank": registry.banks[a.bank_id].name if a.bank_id in registry.banks else a.bank_id,
                  "product": a.product, "status": a.status} for a in apps]
-    return {"new": new, "apps": app_view, "count": len(rows), "hidden": hidden}
+    return {"new": new, "apps": app_view, "count": len(rows), "hidden": hidden,
+            "rejected": sum(rejected.values()), "rejected_by_bank": dict(rejected), "uncorroborated": dropped}
 
 
 def _someone_elses(card) -> bool:
@@ -84,7 +93,7 @@ def view(c, account_id: int) -> dict:
 
 
 def applications(c, account_id: int, registry: Registry) -> list[dict]:
-    evs = list(EvidenceStore(c, account_id).known().values())
+    evs, _ = trust.split_verified(list(EvidenceStore(c, account_id).known().values()))
     _, apps = resolve(evs)
     return [{"bank": registry.banks[a.bank_id].name if a.bank_id in registry.banks else a.bank_id,
              "product": a.product, "status": a.status} for a in apps]

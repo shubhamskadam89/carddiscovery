@@ -127,6 +127,7 @@ class ScanStats:
     first_card_s: float | None = None
     left_unread: int = 0
     reopened: int = 0
+    rejected: int = 0  # bank-domain mail read and ignored because it failed Gmail's check
     per_family: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -186,7 +187,7 @@ def scan(gmail: MeteredGmail, registry: Registry, store: EvidenceStore, queries:
     # 2b. emails an earlier job read only as headers (the quick scan never opens emails)
     # but whose header lacked the card number or product: open them now, highest value first.
     if allow_full_reads:
-        upgrade = [i for i in order if i in known and not known[i].used_body
+        upgrade = [i for i in order if i in known and known[i].dkim_pass and not known[i].used_body
                    and needs_body(known[i], full_statements=False)]
         upgrade = upgrade[:gmail.meter.affordable("full")]
         for start in range(0, len(upgrade), 50):
@@ -212,7 +213,7 @@ def scan(gmail: MeteredGmail, registry: Registry, store: EvidenceStore, queries:
         first = [(m, analyze(m, registry, addresses, names)) for m in metas]
         want = []
         if allow_full_reads:
-            want = [m for m, ev in first if needs_body(ev, full_statements=False)]
+            want = [m for m, ev in first if ev.dkim_pass and needs_body(ev, full_statements=False)]
             want = want[:gmail.meter.affordable("full")]
             if want:
                 gmail.fill_bodies(want)
@@ -224,7 +225,8 @@ def scan(gmail: MeteredGmail, registry: Registry, store: EvidenceStore, queries:
                 ev = analyze(m, registry, addresses, names)
             m.body = None  # email text never outlives this loop
             batch.append(ev)
-            if st.first_card_s is None and ev.last4s and ev.type not in (T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD):
+            if st.first_card_s is None and ev.last4s and ev.dkim_pass and ev.type not in (
+                    T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD):
                 st.first_card_s = round(time.monotonic() - t0, 2)
         store.save(batch)
         st.seconds = round(time.monotonic() - t0, 2)
@@ -298,14 +300,37 @@ def learn_number_tokens(text: str, l4s: list[str]) -> dict[str, set[str]]:
     return out
 
 
-def _known_cards(evs) -> dict[tuple[str, str], None]:
+def _known_cards(evs) -> dict[tuple[str, str], int]:
+    """Cards named in Gmail-verified bank mail, with how many emails mention each, most first.
+    Numbers seen only in mail that failed Gmail's check are never treated as cards."""
+    from collections import Counter
     from carddiscovery.models import CARD_EVIDENCE_TYPES
-    out: dict[tuple[str, str], None] = {}
+    counts: Counter = Counter()
     for ev in evs:
-        if ev.bank_id and ev.type in CARD_EVIDENCE_TYPES:
+        if ev.bank_id and ev.dkim_pass and ev.type in CARD_EVIDENCE_TYPES:
             for l4 in ev.last4s:
-                out[(ev.bank_id, l4)] = None
-    return out
+                counts[(ev.bank_id, l4)] += 1
+    return dict(counts.most_common())
+
+
+# Gmail refuses requests past a size limit (a 17 KB search failed in the 3:1 test), so the
+# exclusion list is capped: the most-mentioned cards are excluded first; any card left out
+# only costs extra reads, never a wrong result.
+MAX_EXCLUSION_CHARS = 2_500
+MAX_LEARNED_FORMS = 6
+
+
+def exclusion_terms(cards: dict[tuple[str, str], int], tokens: dict[tuple[str, str], set[str]]) -> tuple[str, ...]:
+    out: list[str] = []
+    size = 0
+    for b, l4 in cards:
+        terms = [f"-{t}" for t in number_terms(b, l4, sorted(tokens.get((b, l4), ()))[:MAX_LEARNED_FORMS])]
+        cost = sum(len(t) + 1 for t in terms)
+        if size + cost > MAX_EXCLUSION_CHARS:
+            break
+        out += terms
+        size += cost
+    return tuple(out)
 
 
 def _months_back(d: date, months: int) -> date:
@@ -383,7 +408,7 @@ class _Reader:
         self.tokens: dict[tuple[str, str], set[str]] = store.number_tokens()
 
     def _learn(self, m, ev) -> None:
-        if ev.bank_id and ev.last4s:
+        if ev.bank_id and ev.last4s and ev.dkim_pass:
             for l4, words in learn_number_tokens(m.text(), ev.last4s).items():
                 self.tokens.setdefault((ev.bank_id, l4), set()).update(words)
 
@@ -394,8 +419,8 @@ class _Reader:
             m.body = None  # email text never outlives this step
             batch.append(ev)
             self.known[ev.message_id] = ev
-            if self.st.first_card_s is None and ev.last4s and ev.type not in (T.PROMOTIONAL, T.OTP,
-                                                                               T.NOT_CREDIT_CARD):
+            if self.st.first_card_s is None and ev.last4s and ev.dkim_pass and ev.type not in (
+                    T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD):
                 self.st.first_card_s = round(time.monotonic() - self.t0, 2)
         self.store.save(batch)
         self.st.seconds = round(time.monotonic() - self.t0, 2)
@@ -411,7 +436,9 @@ class _Reader:
             metas = self.g.get_metadata(chunk)
             self.st.header_reads += len(metas)
             first = [(m, analyze(m, self.reg, self.addresses, self.names)) for m in metas]
-            want = [m for m, ev in first if needs_body(ev, full_statements=False)][:self.g.meter.affordable("full")]
+            want = [m for m, ev in first if ev.dkim_pass and needs_body(ev, full_statements=False)
+                    ][:self.g.meter.affordable("full")]  # never pay 60 units for mail that failed Gmail's check
+            self.st.rejected = getattr(self.st, "rejected", 0) + sum(1 for _, ev in first if ev.bank_id and not ev.dkim_pass)
             if want:
                 self.g.fill_bodies(want)
                 self.st.full_reads += len(want)
@@ -430,7 +457,8 @@ class _Reader:
 
     def reopen_skimmed(self) -> None:
         """Emails the quick scan read as headers only, whose header lacked the number or product."""
-        ids = [i for i, ev in self.known.items() if not ev.used_body and needs_body(ev, full_statements=False)]
+        ids = [i for i, ev in self.known.items()
+               if ev.dkim_pass and not ev.used_body and needs_body(ev, full_statements=False)]
         n = len(ids)
         self.read_full(ids)
         self.st.reopened += n
@@ -462,7 +490,7 @@ def _probe_cards(gmail, registry: Registry, st: ScanStats, r: "_Reader", cards: 
         senders = tuple(registry.banks[bank].domains if bank in registry.banks else ()) + tested
         if not senders:
             continue
-        num = (_number_group(bank, l4, r.tokens.get((bank, l4), ())),)
+        num = (_number_group(bank, l4, sorted(r.tokens.get((bank, l4), ()))[:MAX_LEARNED_FORMS]),)
         rng = dict(after=after, before=before)
         probes += [((bank, l4), Query(family="card_all", senders=senders, extra=num, **rng)),
                    ((bank, l4), Query(family="card_usage", senders=senders, subject_any=USAGE_WORDS, max_results=1,
@@ -518,7 +546,7 @@ def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date
         plan = (combined_window_plan if COMBINED_WINDOWS else window_plan)(registry, after, before, today)
         for _ in range(ROUNDS_PER_WINDOW):
             cards = _known_cards(r.known.values())
-            excl = tuple(f"-{t}" for b, l4 in cards for t in number_terms(b, l4, r.tokens.get((b, l4), ())))
+            excl = exclusion_terms(cards, r.tokens)
             results = _search_all(gmail, st, [_replace(q, extra=q.extra + excl) for q in plan])
             n_rounds += 1
             lists = [[i for i in ids if i not in r.known] for _, ids in results]

@@ -97,6 +97,7 @@ class Evidence:
     addon: bool = False
     used_body: bool = False
     test: bool = False  # came from a --test-sender address
+    sender: str | None = None  # From address only, lower case (for sender history)
 
     def to_dict(self) -> dict:
         return {
@@ -115,6 +116,7 @@ class Evidence:
             "addon": self.addon,
             "used_body": self.used_body,
             "test": self.test,
+            "sender": self.sender,
         }
 
     @classmethod
@@ -135,6 +137,7 @@ class Evidence:
             addon=d.get("addon", False),
             used_body=d.get("used_body", False),
             test=d.get("test", False),
+            sender=d.get("sender"),
         )
 
 

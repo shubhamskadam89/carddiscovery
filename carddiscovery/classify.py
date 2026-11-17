@@ -209,6 +209,7 @@ def analyze(
         addon=extract.is_addon(text),
         used_body=msg.body is not None,
         test=test,
+        sender=(getaddresses([msg.sender or ""])[0][1].lower() or None) if msg.sender else None,
     )
 
 
