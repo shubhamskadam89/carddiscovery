@@ -118,15 +118,16 @@ From Google's Gmail API usage limits page, checked 2026-11-16. They apply to Clo
 - **What Phase 1 can miss** (Phase 2 finds it): a second card at the same bank whose mail wasn't sampled, and dormant cards with no high-value mail in the last 12 months. Phase 1 is a fast preview, not the complete answer.
 
 ### 3.3 Phase 2: full discovery and enrichment (background, budgeted)
-1. **`discover_full`** (default budget **15,000 units per user**, about 2.5 minutes at the per-user rate):
-   - The full chosen range (default 3 years), for statements, onboarding, lifecycle and application mail.
-   - **Alerts sampled only for the last 12 months.** Older usage is visible through statements, fee and lifecycle mail.
-   - A **tightened catch-all:** excludes the types already searched and Gmail's Promotions category, capped at about 200 messages.
-   - **Header reads first (20 units).** A **full read (60 units) only when the header and preview give no card number or product.** The POC's "always read statements in full" is dropped because it's the biggest cost. Add-on cards in statement bodies are then found only when a full read happens; record that trade-off.
-   - **Already-read emails are skipped** (the evidence table), so a resumed or repeated job costs only what's new.
-   - **If the budget runs out**, the job stops cleanly, records where it stopped, and resumes in the next window. The user sees "Still checking older emails".
-2. **`pdf_enrich`** (only if the user opted in), one item per statement attachment, **last 6 months per card** by default:
-   - Download with `attachments.get` (20 units), with a size cap.
+1. **`discover_full`**: a **card-aware scan** (default budget 15,000 units; measured about 5,200 for 5 years). Searches cost 5 units and reads 20, so once a card is known, its history is found with searches instead of reading every email about it.
+   - **6-month windows, newest first.** Each window runs the family searches (statements, onboarding, lifecycle, applications, sampled payments, alerts for the last 12 months, a capped catch-all) with **every known card's number excluded** (`-2846 -XX2846 …`). Only mail about cards not seen yet comes back; it is read (headers first, full only when needed), new cards join the exclusion list, and the window is searched again only if more than one batch (50) came back. Recent windows find the cards in use; older windows only surface cards that went quiet. Progress: "Checked back to May 2023: 12 cards so far".
+   - **Per card, a few searches by its number:** how many emails mention it, its newest and oldest email, newest usage email, lifecycle emails (fee, upgrade, replacement, closure, inactivity), its **newest statement, opened in full** (add-on cards are named there; 60 units per card), and its **statement-PDF emails** (`has:attachment filename:pdf`), which are indexed, not downloaded.
+   - **Number forms.** Gmail matches whole words, case-insensitively: `2846` matches "ending 2846" and "XXXX XXXX XXXX 2846" but **not** "XX2846" (checked on real Gmail). Every number is therefore searched as `2846 OR XX2846 OR XXXX2846 OR XXXXXXXX2846 OR XXXXXXXXXXXX2846` (Amex: also the 10 possible 5-digit forms), plus every masked form actually seen in that card's mail, e.g. "4375XXXXXXXX2846" (learned while reading; never a full number). A form we miss costs extra reads, never a missed card.
+   - **Card index** (`card_index` table): per card, email count, learned number forms, the Gmail search for its statement PDFs and those emails' ids (newest first), so later jobs go straight to them. Gmail labels aren't an option with read-only access.
+   - **Someone else's card is hidden:** if every email that names a cardholder names someone other than the user (lenient match: any shared name word counts), the card isn't shown. The user can still say it's theirs.
+   - **Already-read emails are skipped** (the evidence table), and **if the budget runs out** the job stops cleanly and resumes later; the user sees "Still checking older emails".
+   - The earlier read-everything scan remains behind a switch (`CD_CARD_AWARE=0`) for comparison.
+2. **`pdf_enrich`** (only if the user opted in): the **newest statement PDF per owned, active card** (dormant and may-be-closed cards have no recent statements), taken from the card index, or found by one search on the card's number if the index has none:
+   - A full read lists the attachment id (60 units), then `attachments.get` (20 units), with a size cap: **80 units per card**.
    - Decrypt using the bank's password pattern from the rules file, built from name + date of birth (stored encrypted). Otherwise ask the user for that bank's password.
    - Extract text; per-bank statement parser; no text layer → OCR (optional).
    - Pull out card facts: number, product, credit limit, points, fees, statement date, totals.
@@ -191,6 +192,7 @@ The AI provider is a sub-processor: disclose it in the privacy policy and the Go
 | Derived evidence per email (type, bank, last 4, product, date, flags; **no text**) | Postgres `evidence` | Lets daily syncs skip emails already read |
 | Gmail-found cards | Postgres `cards` (`source = gmail`) | Source tag enforces Google's Limited Use rules (no ads, partners or lending) |
 | Statement facts (statement date, total due, credit limit, points, fees) | Postgres `statement_facts` | Per card, per statement |
+| Card index: email count, masked number forms (e.g. `XX2846`), the statement-PDF search and those emails' ids | Postgres `card_index` | No email text and no full card numbers; deleted on disconnect |
 | Transactions | **Open decision (Q1)** | Not stored by default |
 | Decisions (Yes/No) | Postgres | Sticky |
 | Jobs | Postgres `jobs` | Status, attempts, errors; no content |
@@ -228,7 +230,7 @@ jobs(id, kind, account_id, payload jsonb, status, run_after, attempts, last_erro
 ```
 
 - **Priority:** `discover_quick` > `discover_full` > `daily_sync` > `pdf_enrich` > `ai_extract`.
-- **Per-user Gmail limiter:** a token bucket of **5,500 units per minute** per Gmail connection, below Google's 6,000. Every call is charged its unit cost (5 / 20 / 60 / 20 / 2) **before** it's sent. Back off on 429/5xx.
+- **Per-user Gmail limiter:** a rolling-minute limiter of **5,900 units per minute** per Gmail connection, below Google's 6,000. Every call is charged its unit cost (5 / 20 / 60 / 20 / 2) **before** it's sent. Back off on 429/5xx.
 - **Per-job budgets:** `discover_quick` 1,000 units, `discover_full` 15,000, `daily_sync` 500, `pdf_enrich` 20 per PDF. A job that hits its budget saves its place and requeues with a delay.
 - **Project-wide daily meter:** units used today, across all users, in Postgres (later Redis). Alert at 60% and 80% of 80M. Above 90%, defer `discover_full` and `pdf_enrich` to the next day; keep `discover_quick` and `daily_sync` running.
 - **Network failures:** the job returns to `queued` with an increasing `run_after` and resumes from its saved progress. The evidence table makes this safe to repeat.
@@ -243,28 +245,36 @@ Unit costs from §1a: search 5, header read 20, full read 60, PDF 20.
 
 ### Per user
 
-| | Phase 1 | Phase 2 `discover_full` (3 years) | Statement PDFs (opt-in, 6 months) | Daily sync |
-|---|---|---|---|---|
-| Searches | about 15 (75) | about 30 (150) | — | 1 (5) |
-| Header reads | about 40 (800) | about 250–500 (5,000–10,000) | — | about 2–5 (40–100) |
-| Full reads | 0 | about 20–60 (1,200–3,600) | — | about 0–1 (0–60) |
-| PDF downloads | — | — | about 6 per card (120 per card) | about 0–1 (0–20) |
-| **Units** | **about 900** | **about 6,000–14,000** (budget 15,000) | **about 360 for 3 cards** | **about 50–150** |
-| Time at 5,500 units/min | **about 10 s** | **about 1–3 min** | seconds | under 2 s |
+Measured on real Gmail with the simulated 10,000-email, 5-year inbox (12 cards plus an add-on, 2,489 promotions, 668 debit/savings emails, traps), at a 5,900 units/minute cap:
 
-**Checked against the POC simulation** (12,199 emails over 5 years, 3-year scan, heavy user):
-- **As the POC runs today** (the catch-all reads 2,000 promotion headers, every statement read in full): 2,113 header reads × 20 + 111 full reads × 60 + about 40 searches × 5 ≈ **49,000 units, about 9 minutes**.
-- **With the Phase 2 rules above** (tightened catch-all, full reads only when needed): about 400 header reads + about 30 full reads ≈ **10,000 units, about 2 minutes**.
+| | Quick scan | Full scan, 3 years | Full scan, 5 years | Statement PDFs | Daily sync (estimate) |
+|---|---|---|---|---|---|
+| Searches | 6 (30) | about 150 (about 750) | 206 (1,030) | 1–2 (5–10) | 1 (5) |
+| Header reads | 40 (800) | about 110 (about 2,200) | 165 (3,300) | — | about 2–5 (40–100) |
+| Full reads | 0 | about 20 (about 1,300) | 15 (900) | 4 (240) | about 0–1 (0–60) |
+| PDF downloads | — | — | — | 4 (80) | — |
+| **Units** | **832** | **about 4,300** (dry run) | **5,232** | **330** | **about 50–150** |
+| Time | first card 2–4 s | — | 61 s | 4–16 s | under 2 s |
 
-These two changes are the most important engineering work for cost and speed.
+The full scan is no longer limited by quota (no job waited for the per-minute limit): its time is about 200 searches in sequential batches, at 1–2 s per call to Gmail.
+
+**How it got here** (same inbox, 3 years):
+
+| Version | Full-scan units | Full-scan time | Cards right |
+|---|---|---|---|
+| Read everything the searches return (catch-all reads promotions, every statement in full) | about 33,000 (dry run) | — | 12/12 (dry run) |
+| Noise filtered in the search itself (`-category:promotions`, `-subject:` OTP/debit/savings/offers), sampled payments | 11,782 | 126 s | 11/12 (add-on missed) |
+| Card-aware: known card numbers excluded, per-card searches | 2,997 | 11 s | 11/12 (add-on missed) |
+| Card-aware with 6-month windows, newest statement in full, learned number forms (5 years) | 5,232 | 61 s | **13/13** |
 
 ### Product-wide, against 80M units a day
 
 | Workload | Units each | What 80M a day allows on its own |
 |---|---|---|
-| New user: Phase 1 + Phase 2 + PDFs | about 11,000–16,000 | about 5,000–7,000 new users a day |
+| New user, 3 years: quick + full + PDFs | about 5,500 (measured 4,179 before windows and add-ons) | about 14,000–19,000 new users a day |
+| New user, 5 years: quick + full + PDFs | 6,394 (measured) | about 12,500 new users a day |
 | Daily sync | about 50–150 | about 500,000–1,600,000 connected users |
-| **Example mix:** 300,000 connected users syncing daily + 2,000 new users a day | about 30M + about 30M = **about 60M** | Fits, with headroom |
+| **Example mix:** 300,000 connected users syncing daily + 5,000 new users a day (5 years) | about 30M + about 32M = **about 62M** | Fits, with headroom |
 
 When the meter trends towards 80M, the levers are:
 - a shorter default lookback
@@ -340,7 +350,7 @@ The same architecture, the same components and the same job flow, on one machine
 | EC2 workers | 1–2 `carddiscovery worker` processes | Identical code |
 | Cron | `carddiscovery scheduler` process (enqueues daily syncs, token checks, cleanup) | Same job kinds |
 | KMS envelope encryption | A local master key file (`0600`) used through the same `encrypt()` / `decrypt()` interface, with a per-token data key (AES-GCM) | Swap for KMS later |
-| Per-user rate limiter + daily meter | In Postgres: units charged per call, 5,500/min per connection, daily total with alert thresholds | Same numbers |
+| Per-user rate limiter + daily meter | In Postgres: units charged per call, 5,900/min per connection, daily total with alert thresholds | Same numbers |
 | Login (phone + OTP) | **Out of scope: a separate login service.** The mini version takes that service's user id through `/api/dev/login`; accounts are keyed by `external_id` | Production verifies the login service's token instead |
 | App attestation | Skipped (local only) | — |
 | Push notifications | In-app banner on next open | — |
@@ -365,7 +375,7 @@ The same architecture, the same components and the same job flow, on one machine
 | 1 | Postgres schema (§6), DB access layer, migrations | Tables created by one command |
 | 2 | Job queue: enqueue / claim (`SKIP LOCKED`) / complete / retry with backoff / cancel; `worker` process | Two workers never take the same job; a crashed job is retried |
 | 3 | Token vault (local envelope encryption) + `/gmail/connect` code exchange | Refresh token stored encrypted; the API process can't read it |
-| 4 | Quota layer: per-call unit charging, 5,500/min limiter, per-job budgets, daily meter | Unit tests show a 15,000-unit job pausing and resuming |
+| 4 | Quota layer: per-call unit charging, 5,900/min limiter, per-job budgets, daily meter | Unit tests show a 15,000-unit job pausing and resuming |
 | 5 | `discover_quick` (round-robin, about 40 reads) + streaming status to the page | Your test inbox shows cards in about 10 s |
 | 6 | `discover_full` with the cost fixes (tightened catch-all, full reads only when needed) | Simulation scan costs about 10,000 units, not 49,000 |
 | 7 | Card picker (bank → card → network only when needed) + Gmail suggestions merged into it | Picker and Gmail cards in one list, with `source` tags |

@@ -15,7 +15,8 @@ from carddiscovery.queries import Query
 from carddiscovery.registry import Registry
 
 from . import cards, config, pdf, queue
-from .engine import EvidenceStore, full_plan, quick_plan, scan, since_date, sync_plan
+from .engine import (EvidenceStore, card_aware_scan, full_plan, number_terms, quick_plan, scan, since_date,
+                     sync_plan)
 from .gmailx import Cancelled, Meter, MeteredGmail
 from .vault import Vault
 
@@ -118,8 +119,13 @@ def discover_full(j: Job) -> None:
         j.rebuild()
         j.say(f"Read {st.header_reads} emails ({st.full_reads} in full)")
 
-    st = scan(j.gmail, j.registry, EvidenceStore(j.c, j.account_id), full_plan(j.registry, date.today(), years),
-              names=j.names(), on_batch=on_batch)
+    if config.CARD_AWARE_FULL_SCAN:
+        st = card_aware_scan(j.gmail, j.registry, EvidenceStore(j.c, j.account_id), date.today(), years,
+                             names=j.names(), on_batch=on_batch,
+                             on_window=lambda d, n: j.say(f"Checked back to {d:%b %Y}: {n} cards so far"))
+    else:
+        st = scan(j.gmail, j.registry, EvidenceStore(j.c, j.account_id), full_plan(j.registry, date.today(), years),
+                  names=j.names(), on_batch=on_batch)
     j.stats = st.as_dict()
     r = j.rebuild()
     j.c.execute("UPDATE gmail_connections SET last_synced_at = %s WHERE account_id = %s",
@@ -155,37 +161,41 @@ def pdf_enrich(j: Job) -> None:
     if j.conn["dob_blob"]:
         dob = date.fromisoformat(j.vault.open(bytes(j.conn["dob_blob"]), f"dob:{j.account_id}").decode())
     name = (j.names() or [None])[0]
-    # Only cards the user owns (never ones still "to review": they may be someone else's).
+    # Only cards the user owns and still uses (never ones "to review": they may be someone else's;
+    # not dormant or may-be-closed ones: they have no recent statements to read).
     rows = j.c.execute("SELECT bank_id, last4 FROM cards WHERE account_id = %s AND source = 'gmail' "
-                       "AND grp = 'owned' AND last4 IS NOT NULL", (j.account_id,)).fetchall()
+                       "AND grp = 'owned' AND last4 IS NOT NULL AND view->>'status' IN ('Active', 'New')",
+                       (j.account_id,)).fetchall()
     by_bank: dict[str, set[str]] = {}
     for r in rows:
         by_bank.setdefault(r["bank_id"], set()).add(r["last4"])
     done_ids = {r["message_id"] for r in
                 j.c.execute("SELECT message_id FROM statement_facts WHERE account_id = %s", (j.account_id,))}
-    # Which card each statement email is about, from what we already read (no extra Gmail calls).
-    card_of = {mid: ev.last4s for mid, ev in EvidenceStore(j.c, j.account_id).known().items()}
     after = date.today() - timedelta(days=30 * config.PDF_MONTHS)
-    tested = j.registry.test_senders
-    banks = sorted(by_bank)
-    queries = [Query(family="pdf", senders=tuple(j.registry.banks[b].domains or []) + tuple(tested),
-                     subject_any=("statement",), after=after, extra=("has:attachment", "filename:pdf"),
-                     max_results=10) for b in banks]
-    j.say(f"Looking for statement PDFs for {len(rows)} cards at {len(banks)} banks")
-    found = j.gmail.search_many(queries)
+    tested = tuple(j.registry.test_senders)
+    # One search per card, by its number: the newest statement email with a PDF for exactly that card.
+    cards_ = [(r["bank_id"], r["last4"]) for r in rows]
+    queries = [Query(family="pdf", senders=tuple(j.registry.banks[b].domains or []) + tested,
+                     subject_any=("statement",), after=after, max_results=1,
+                     extra=("has:attachment", "filename:pdf", "(" + " OR ".join(number_terms(b, l4)) + ")"))
+               for b, l4 in cards_]
+    j.say(f"Looking for the newest statement PDF of {len(cards_)} cards")
+    # The full scan already indexed each card's statement-PDF emails: use them, search only when missing.
+    indexed = {(r["bank_id"], r["last4"]): list(r["pdf_message_ids"]) for r in j.c.execute(
+        "SELECT bank_id, last4, pdf_message_ids FROM card_index WHERE account_id = %s", (j.account_id,))}
+    need = [i for i, card in enumerate(cards_) if not indexed.get(card)]
+    searched = j.gmail.search_many([queries[i] for i in need]) if need else []
+    found = [indexed.get(card, [])[:1] for card in cards_]
+    for i, ids in zip(need, searched):
+        found[i] = ids
     added = skipped = 0
-    for bank, ids in zip(banks, found):
-        want = set(by_bank[bank])  # the newest statement per card is enough
-        for mid in ids:  # newest first
-            l4s = card_of.get(mid, [])
+    for (bank, l4), ids in zip(cards_, found):
+        for mid in ids:
             if mid in done_ids:
-                want -= set(l4s)  # already have this card's newest statement
+                skipped += 1  # already have this statement
                 continue
-            if not want or j.meter.affordable("full") < 1:
+            if j.meter.affordable("full") < 1:
                 break
-            if l4s and not set(l4s) & want:
-                skipped += 1  # an older statement of a card we've covered: 80 units saved
-                continue
             for _, att in j.gmail.pdf_attachments(mid):
                 if j.meter.affordable("attachment") < 1:
                     break
@@ -209,7 +219,6 @@ def pdf_enrich(j: Job) -> None:
                     (j.account_id, mid, bank, f.last4, f.statement_date, f.total_due, f.minimum_due, f.credit_limit,
                      f.available_limit, f.reward_points, f.reconciled))
                 added += 1
-                want.discard(f.last4)
                 break
     j.stats = {"pdfs_read": added, "older_statements_skipped": skipped}
     j.say(f"Added details from {added} statement PDFs")
@@ -232,7 +241,7 @@ def disconnect(j: Job) -> None:
         except Exception:
             revoked = False  # the token is deleted regardless
     with j.c.transaction():
-        for t in ("evidence", "statement_facts", "notifications", "decisions"):
+        for t in ("evidence", "statement_facts", "notifications", "decisions", "card_index"):
             j.c.execute(f"DELETE FROM {t} WHERE account_id = %s", (j.account_id,))
         j.c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (j.account_id,))
         j.c.execute("DELETE FROM gmail_connections WHERE account_id = %s", (j.account_id,))

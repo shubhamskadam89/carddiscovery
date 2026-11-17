@@ -71,7 +71,7 @@ class Api:
             if old and old["status"] == "disconnecting":
                 return "expired"
             if old and old["mailbox"] != mailbox:  # a different Gmail account: start clean
-                for t in ("evidence", "statement_facts", "decisions"):
+                for t in ("evidence", "statement_facts", "decisions", "card_index"):
                     c.execute(f"DELETE FROM {t} WHERE account_id = %s", (acc["id"],))
                 c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (acc["id"],))
             c.execute(

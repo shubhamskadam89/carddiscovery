@@ -26,8 +26,12 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
     before = {r["card_key"] for r in
               c.execute("SELECT card_key FROM cards WHERE account_id = %s AND source = 'gmail'", (account_id,))}
     rows = []
+    hidden = 0
     for card in cards:
         card.decision = answers.get(card.decision_key)
+        if _someone_elses(card) and card.decision != "yes":
+            hidden += 1  # a name was found on its mail and it never matched the user: not shown at all
+            continue
         e = explain(card, registry)
         g = group(card)
         view = {"key": card.decision_key, "title": e.title, "status": e.status, "headline": e.headline,
@@ -44,7 +48,14 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
     new = [r[1] for r in rows if r[1] not in before and r[5] in ("owned", "review")]
     app_view = [{"bank": registry.banks[a.bank_id].name if a.bank_id in registry.banks else a.bank_id,
                  "product": a.product, "status": a.status} for a in apps]
-    return {"new": new, "apps": app_view, "count": len(rows)}
+    return {"new": new, "apps": app_view, "count": len(rows), "hidden": hidden}
+
+
+def _someone_elses(card) -> bool:
+    """Every email about this card that names a cardholder names someone other than the user.
+    (Name matching is lenient: any shared name word counts as a match.)"""
+    named = [e.name_match for e in card.evidence if e.name_match is not None]
+    return bool(named) and not any(named)
 
 
 def view(c, account_id: int) -> dict:

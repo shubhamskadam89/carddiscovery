@@ -191,3 +191,36 @@ def test_wrong_password_asks_the_user_and_bad_totals_are_flagged():
         pdf.open_pdf(make_pdf(STATEMENT, password="XXXX0000"), ["SHUB1403"])
     bad = [l.replace("9,412.00", "9,999.00") if l.startswith("Total") else l for l in STATEMENT]
     assert pdf.parse(pdf.open_pdf(make_pdf(bad), [])).reconciled is False
+
+
+# ---------------------------------------------------------------- card-aware scan pieces
+
+def test_number_forms_are_learned_from_mail_and_never_include_a_full_number():
+    text = "Card 4375XXXXXXXX2846 used. Also XX2846, ending 2846, Rs 2846 and 4375123412342846."
+    assert engine.learn_number_tokens(text, ["2846"]) == {"2846": {"4375XXXXXXXX2846", "XX2846"}}
+    terms = engine.number_terms("hdfc", "2846", ["4375XXXXXXXX2846", "xx2846"])
+    assert terms[:3] == ["2846", "XX2846", "XXXX2846"] and terms.count("XX2846") == 1
+    assert "4375XXXXXXXX2846" in terms
+    assert "41005" in engine.number_terms("amex", "1005")
+
+
+def test_windows_cover_the_lookback_newest_first_without_gaps():
+    ws = engine.windows(date(2026, 11, 16), 5)
+    assert ws[0][1] == date(2026, 11, 17) and ws[-1][0] == date(2021, 11, 1)
+    assert all(a[0] == b[1] for a, b in zip(ws, ws[1:]))  # each window ends where the next starts
+    assert len(ws) == 11
+
+
+def test_a_card_only_ever_in_someone_elses_name_is_hidden(c, account):
+    a = account()
+    store = engine.EvidenceStore(c, a)
+    from carddiscovery.models import Evidence, EvidenceType as ET
+    now = datetime.now(timezone.utc)
+    ev = lambda i, l4, nm: Evidence(message_id=f"e{i}", date=now - timedelta(days=30 * i), bank_id="hdfc",
+                                    type=ET.STATEMENT, last4s=[l4], product="Millennia", dkim_pass=True,
+                                    name_match=nm)
+    store.save([ev(1, "2846", True), ev(2, "2846", None), ev(3, "9988", False), ev(4, "9988", False)])
+    from cdserver import cards
+    out = cards.rebuild(c, a, Registry.load())
+    shown = {r["last4"] for r in c.execute("SELECT last4 FROM cards WHERE account_id = %s", (a,))}
+    assert shown == {"2846"} and out["hidden"] == 1

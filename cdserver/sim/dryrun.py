@@ -61,11 +61,20 @@ class LocalBox:
             return False
         if any(words(t, subj) for t in q.exclude_subject):
             return False
+        tokens = None
         for e in q.extra:
             if e == "-category:promotions" and "CATEGORY_PROMOTIONS" in m.labels:
                 return False
             if e in ("has:attachment", "filename:pdf") and not m.attachments:
                 return False
+            if e.startswith("(") or (e.startswith("-") and ":" not in e):
+                # Gmail matches whole words, case-insensitively ("XX2846" is one word, "2846" another)
+                tokens = tokens or set(re.findall(r"[a-z0-9]+", (m.subject + " " + m.text).lower()))
+                if e.startswith("("):
+                    if not any(t.lower() in tokens for t in e.strip("()").split(" OR ")):
+                        return False
+                elif e[1:].lower() in tokens:
+                    return False
         return True
 
     def search(self, q: Query) -> list[str]:
@@ -98,7 +107,7 @@ class LocalBox:
 def run(c, account_id: int, mails: list[Mail], to: str, registry, years: int, names: list[str]) -> list[dict]:
     """Quick scan, then the full scan (resuming as the real worker would), into Postgres."""
     from .. import cards, config
-    from ..engine import EvidenceStore, full_plan, quick_plan, scan
+    from ..engine import EvidenceStore, card_aware_scan, full_plan, quick_plan, scan
     out = []
     today = date.fromisoformat("2026-11-16")
     m = Meter(config.BUDGETS["discover_quick"], per_minute=10**9)
@@ -111,8 +120,12 @@ def run(c, account_id: int, mails: list[Mail], to: str, registry, years: int, na
         rounds += 1
         m = Meter(config.BUDGETS["discover_full"], per_minute=10**9)
         try:
-            st = scan(LocalBox(mails, to, m), registry, EvidenceStore(c, account_id), full_plan(registry, today, years),
-                      names=names)
+            if config.CARD_AWARE_FULL_SCAN:
+                st = card_aware_scan(LocalBox(mails, to, m), registry, EvidenceStore(c, account_id), today, years,
+                                     names=names)
+            else:
+                st = scan(LocalBox(mails, to, m), registry, EvidenceStore(c, account_id),
+                          full_plan(registry, today, years), names=names)
             out.append({"kind": f"discover_full #{rounds}", **st.as_dict(), **m.summary()})
             break
         except BudgetExhausted as e:

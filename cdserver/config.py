@@ -21,7 +21,7 @@ TEST_SENDERS = [s.strip() for s in os.environ.get("CD_TEST_SENDERS", "").split("
 
 # Gmail API quota units (Google's usage-limits page, May 2026).
 UNITS = {"search": 5, "metadata": 20, "full": 60, "attachment": 20, "profile": 1, "history": 2}
-PER_USER_UNITS_PER_MIN = 5_500          # Google allows 6,000; keep headroom
+PER_USER_UNITS_PER_MIN = 5_900          # Google allows 6,000; 100 units of headroom
 PROJECT_UNITS_PER_DAY = 80_000_000      # can't be raised
 DEFER_BACKGROUND_ABOVE = 0.90           # of the daily limit
 
@@ -30,6 +30,7 @@ BUDGETS = {"discover_quick": 1_000, "discover_full": 15_000, "daily_sync": 500, 
 PRIORITY = {"disconnect": 0, "discover_quick": 10, "discover_full": 20, "daily_sync": 30,
             "pdf_enrich": 40, "token_check": 50}
 
+CARD_AWARE_FULL_SCAN = os.environ.get("CD_CARD_AWARE", "1") != "0"  # search known cards' numbers
 QUICK_LOOKBACK_YEARS = 1
 QUICK_MAX_READS = 40
 FULL_ALERT_YEARS = 1
