@@ -131,7 +131,7 @@ def discover_full(j: Job) -> None:
     j.c.execute("UPDATE gmail_connections SET last_synced_at = %s WHERE account_id = %s",
                 (j.row["started_at"], j.account_id))
     j.say(f"Full check done: {r['count']} cards")
-    if j.conn["pdf_opt_in"]:
+    if j.conn["pdf_opt_in"] and config.READ_STATEMENT_PDFS:
         queue.enqueue(j.c, "pdf_enrich", j.account_id)
 
 

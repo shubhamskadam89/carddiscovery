@@ -205,10 +205,11 @@ def test_number_forms_are_learned_from_mail_and_never_include_a_full_number():
 
 
 def test_windows_cover_the_lookback_newest_first_without_gaps():
-    ws = engine.windows(date(2026, 11, 16), 5)
-    assert ws[0][1] == date(2026, 11, 17) and ws[-1][0] == date(2021, 11, 1)
-    assert all(a[0] == b[1] for a, b in zip(ws, ws[1:]))  # each window ends where the next starts
-    assert len(ws) == 11
+    for schedule, count in (((6,), 11), ((3,), 21), ((1,), 61), ((1, 2, 3, 6, 12), 9)):
+        ws = engine.windows(date(2026, 11, 16), 5, schedule)
+        assert ws[0][1] == date(2026, 11, 17) and ws[-1][0] == date(2021, 11, 1)
+        assert all(a[0] == b[1] for a, b in zip(ws, ws[1:]))  # each window ends where the next starts
+        assert len(ws) == count, schedule
 
 
 def test_a_card_only_ever_in_someone_elses_name_is_hidden(c, account):

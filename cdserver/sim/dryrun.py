@@ -67,6 +67,15 @@ class LocalBox:
                 return False
             if e in ("has:attachment", "filename:pdf") and not m.attachments:
                 return False
+            if e.startswith("(subject:("):
+                # "(subject:(a OR b) OR "x y" OR z)": a subject word, or a word/phrase anywhere
+                subj_part, _, rest = e[len("(subject:("):].partition(") OR ")
+                subj_terms = [t.strip('"') for t in subj_part.split(" OR ")]
+                text_terms = [t.strip('"') for t in rest.rstrip(")").split(" OR ")]
+                hay = (m.subject + " " + m.text).lower()
+                if not (any(words(t, subj) for t in subj_terms) or any(words(t, hay) for t in text_terms)):
+                    return False
+                continue
             if e.startswith("(") or (e.startswith("-") and ":" not in e):
                 # Gmail matches whole words, case-insensitively ("XX2846" is one word, "2846" another)
                 tokens = tokens or set(re.findall(r"[a-z0-9]+", (m.subject + " " + m.text).lower()))

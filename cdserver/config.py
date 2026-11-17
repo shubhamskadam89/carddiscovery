@@ -31,6 +31,9 @@ PRIORITY = {"disconnect": 0, "discover_quick": 10, "discover_full": 20, "daily_s
             "pdf_enrich": 40, "token_check": 50}
 
 CARD_AWARE_FULL_SCAN = os.environ.get("CD_CARD_AWARE", "1") != "0"  # search known cards' numbers
+# Statement PDFs are indexed by the full scan (5 units per card) but not downloaded and read
+# (80 units per card) unless this is on. Off for now: PDF analysis comes later.
+READ_STATEMENT_PDFS = os.environ.get("CD_READ_PDFS", "0") == "1"
 QUICK_LOOKBACK_YEARS = 1
 QUICK_MAX_READS = 40
 FULL_ALERT_YEARS = 1

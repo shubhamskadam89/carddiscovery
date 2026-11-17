@@ -119,14 +119,15 @@ From Google's Gmail API usage limits page, checked 2026-11-16. They apply to Clo
 
 ### 3.3 Phase 2: full discovery and enrichment (background, budgeted)
 1. **`discover_full`**: a **card-aware scan** (default budget 15,000 units; measured about 5,200 for 5 years). Searches cost 5 units and reads 20, so once a card is known, its history is found with searches instead of reading every email about it.
-   - **6-month windows, newest first.** Each window runs the family searches (statements, onboarding, lifecycle, applications, sampled payments, alerts for the last 12 months, a capped catch-all) with **every known card's number excluded** (`-2846 -XX2846 …`). Only mail about cards not seen yet comes back; it is read (headers first, full only when needed), new cards join the exclusion list, and the window is searched again only if more than one batch (50) came back. Recent windows find the cards in use; older windows only surface cards that went quiet. Progress: "Checked back to May 2023: 12 cards so far".
-   - **Per card, a few searches by its number:** how many emails mention it, its newest and oldest email, newest usage email, lifecycle emails (fee, upgrade, replacement, closure, inactivity), its **newest statement, opened in full** (add-on cards are named there; 60 units per card), and its **statement-PDF emails** (`has:attachment filename:pdf`), which are indexed, not downloaded.
+   - **3-month windows, newest first.** Each window runs 2 merged searches per group of bank sender addresses (statement, payment and application mail; onboarding, lifecycle and catch-all text outside the Promotions tab) plus sampled alerts in the last 12 months, with **every known card's number excluded** (`-2846 -XX2846 …`). Only mail about cards not seen yet comes back; it is read (headers first, full only when needed), and the window is searched again only if more than one batch (50) came back. Progress: "Checked back to Aug 2024: 12 cards so far".
+   - **Each new card is looked up at once, over its window and everything older:** how many emails mention it, its newest and oldest email, newest usage email, lifecycle emails (fee, upgrade, replacement, closure, inactivity), its **newest statement, opened in full** (add-on cards are named there; 60 units per card), and its **statement-PDF emails** (`has:attachment filename:pdf`), indexed but not downloaded. The first window finds the cards in use and fetches their whole history; later windows only find cards that went quiet. A found card is never searched for again, and is complete as soon as it is found, so a scan that pauses for budget leaves finished cards.
+   - **Window size, measured** (5 years; all 13/13 correct). Real Gmail: 3-month windows 5,017 units, 1-month windows 5,557 units (61 windows need about 340 searches), 6-month windows with separate per-type searches 4,997 units. Offline dry run: 1 month 6,277, 3 months 5,497, 6 months 5,697, 12 months 6,857. Smaller windows read slightly fewer emails but need more searches; 3 months is the default (`CD_WINDOWS`, e.g. `1` or `1,2,3,6,12`).
    - **Number forms.** Gmail matches whole words, case-insensitively: `2846` matches "ending 2846" and "XXXX XXXX XXXX 2846" but **not** "XX2846" (checked on real Gmail). Every number is therefore searched as `2846 OR XX2846 OR XXXX2846 OR XXXXXXXX2846 OR XXXXXXXXXXXX2846` (Amex: also the 10 possible 5-digit forms), plus every masked form actually seen in that card's mail, e.g. "4375XXXXXXXX2846" (learned while reading; never a full number). A form we miss costs extra reads, never a missed card.
    - **Card index** (`card_index` table): per card, email count, learned number forms, the Gmail search for its statement PDFs and those emails' ids (newest first), so later jobs go straight to them. Gmail labels aren't an option with read-only access.
    - **Someone else's card is hidden:** if every email that names a cardholder names someone other than the user (lenient match: any shared name word counts), the card isn't shown. The user can still say it's theirs.
    - **Already-read emails are skipped** (the evidence table), and **if the budget runs out** the job stops cleanly and resumes later; the user sees "Still checking older emails".
    - The earlier read-everything scan remains behind a switch (`CD_CARD_AWARE=0`) for comparison.
-2. **`pdf_enrich`** (only if the user opted in): the **newest statement PDF per owned, active card** (dormant and may-be-closed cards have no recent statements), taken from the card index, or found by one search on the card's number if the index has none:
+2. **`pdf_enrich`** (only if the user opted in; **off for now**, `CD_READ_PDFS=1` enables it, since PDF analysis comes later and the index already records where each card's statements are): the **newest statement PDF per owned, active card** (dormant and may-be-closed cards have no recent statements), taken from the card index, or found by one search on the card's number if the index has none:
    - A full read lists the attachment id (60 units), then `attachments.get` (20 units), with a size cap: **80 units per card**.
    - Decrypt using the bank's password pattern from the rules file, built from name + date of birth (stored encrypted). Otherwise ask the user for that bank's password.
    - Extract text; per-bank statement parser; no text layer → OCR (optional).
@@ -266,6 +267,8 @@ The full scan is no longer limited by quota (no job waited for the per-minute li
 | Noise filtered in the search itself (`-category:promotions`, `-subject:` OTP/debit/savings/offers), sampled payments | 11,782 | 126 s | 11/12 (add-on missed) |
 | Card-aware: known card numbers excluded, per-card searches | 2,997 | 11 s | 11/12 (add-on missed) |
 | Card-aware with 6-month windows, newest statement in full, learned number forms (5 years) | 5,232 | 61 s | **13/13** |
+| Each window's new cards looked up at once; statement PDFs not read (5 years) | 4,997 | 21 s | **13/13** |
+| 3-month windows with merged searches (5 years, current default) | 5,017 | 32 s | **13/13** |
 
 ### Product-wide, against 80M units a day
 
@@ -273,6 +276,7 @@ The full scan is no longer limited by quota (no job waited for the per-minute li
 |---|---|---|
 | New user, 3 years: quick + full + PDFs | about 5,500 (measured 4,179 before windows and add-ons) | about 14,000–19,000 new users a day |
 | New user, 5 years: quick + full + PDFs | 6,394 (measured) | about 12,500 new users a day |
+| New user, 5 years: quick + full, PDFs not read (current) | 5,849 (measured) | about 13,700 new users a day |
 | Daily sync | about 50–150 | about 500,000–1,600,000 connected users |
 | **Example mix:** 300,000 connected users syncing daily + 5,000 new users a day (5 years) | about 30M + about 32M = **about 62M** | Fits, with headroom |
 

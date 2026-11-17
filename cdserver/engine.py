@@ -9,6 +9,7 @@ Per §3.2/§3.3 of the architecture:
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -265,9 +266,11 @@ MASK_PREFIXES = ("", "XX", "XXXX", "XXXXXXXX", "XXXXXXXXXXXX")
 LIFECYCLE_WORDS = ("annual fee", "upgraded", "upgrade", "replacement", "replaced", "closure", "closed",
                    "inactive", "not been used", "reissue", "renewal", "welcome", "dispatched", "activated")
 USAGE_WORDS = ("statement", "spent", "transaction", "payment", "alert")
-WINDOW_MONTHS = 6
-ROUNDS_PER_WINDOW = 3
-READS_PER_ROUND = 50
+# Window sizes in months, newest first; the last size repeats. "6" = fixed 6-month windows,
+# "1,2,3,6,12" = start small (cards in use show up fastest) and grow as older mail thins out.
+WINDOW_SCHEDULE = tuple(int(x) for x in os.environ.get("CD_WINDOWS", "3").split(","))
+ROUNDS_PER_WINDOW = int(os.environ.get("CD_ROUNDS", "3"))
+READS_PER_ROUND = int(os.environ.get("CD_READS_PER_ROUND", "50"))
 WINDOW_CATCH_ALL_CAP = 100
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
@@ -310,11 +313,13 @@ def _months_back(d: date, months: int) -> date:
     return date(m // 12, m % 12 + 1, min(d.day, 28))
 
 
-def windows(today: date, years: int) -> list[tuple[date, date]]:
-    """[after, before) ranges of WINDOW_MONTHS, newest first, covering the lookback."""
+def windows(today: date, years: int, schedule: tuple[int, ...] | None = None) -> list[tuple[date, date]]:
+    """[after, before) ranges, newest first, covering the lookback, sized by the schedule."""
+    schedule = schedule or WINDOW_SCHEDULE
     start, end, out = _years_ago(today, years), today + timedelta(days=1), []
     while end > start:
-        w = max(start, _months_back(end, WINDOW_MONTHS))
+        months = schedule[min(len(out), len(schedule) - 1)]
+        w = max(start, _months_back(end, months))
         out.append((w, end))
         end = w
     return out
@@ -333,6 +338,36 @@ def window_plan(registry: Registry, after: date, before: date, today: date) -> l
     covered = tuple(w for f in FAMILIES.values() for w in f) + SAMPLED_FAMILY_SUBJECTS
     out += [Query(family="catch_all", senders=c, text_any=CATCH_ALL_TEXT, exclude_subject=NOISE_SUBJECT + covered,
                   after=after, before=before, max_results=WINDOW_CATCH_ALL_CAP, extra=NO_PROMOS) for c in chunks]
+    return out
+
+
+COMBINED_WINDOWS = os.environ.get("CD_COMBINED", "1") != "0"
+
+
+def _q(term: str) -> str:
+    return f'"{term}"' if " " in term else term
+
+
+def combined_window_plan(registry: Registry, after: date, before: date, today: date) -> list[Query]:
+    """The window's searches merged into 2 per sender group (plus alerts in the last 12 months).
+    With every known card excluded, little comes back, so per-type searches aren't needed:
+      - statements, payments, applications (not filtered by the Promotions tab)
+      - onboarding, lifecycle and the catch-all text, outside the Promotions tab"""
+    chunks = _chunks(registry.all_domains())
+    core = FAMILIES["statement"] + FAMILIES["payment"] + FAMILIES["application"]
+    offer_prone = FAMILIES["onboarding"] + FAMILIES["lifecycle"]
+    other = ("(subject:(" + " OR ".join(_q(w) for w in offer_prone) + ") OR "
+             + " OR ".join(_q(t) for t in CATCH_ALL_TEXT) + ")")
+    out = []
+    for c in chunks:
+        out.append(Query(family="core", senders=c, subject_any=core, exclude_subject=NOISE_SUBJECT,
+                         after=after, before=before))
+        out.append(Query(family="other", senders=c, exclude_subject=NOISE_SUBJECT, after=after, before=before,
+                         extra=NO_PROMOS + (other,)))
+    alert_start = _years_ago(today, config.FULL_ALERT_YEARS)
+    if before > alert_start:
+        out += [Query(family="alerts", senders=c, subject_any=SAMPLED_FAMILY_SUBJECTS, exclude_subject=NOISE_SUBJECT,
+                      after=max(after, alert_start), before=before, max_results=40) for c in chunks]
     return out
 
 
@@ -416,20 +451,71 @@ def _search_all(gmail, st: ScanStats, queries: list[Query]) -> list[tuple[str, l
     return results
 
 
+def _probe_cards(gmail, registry: Registry, st: ScanStats, r: "_Reader", cards: list[tuple[str, str]],
+                 after: date, before: date, index: dict) -> None:
+    """For each card, a few searches by its number over [after, before): count, newest and oldest
+    email, newest usage, lifecycle emails, newest statement (opened in full: add-on cards are
+    named there) and its statement-PDF emails (indexed, not downloaded)."""
+    tested = tuple(registry.test_senders)
+    probes: list[tuple[tuple[str, str], Query]] = []
+    for bank, l4 in cards:
+        senders = tuple(registry.banks[bank].domains if bank in registry.banks else ()) + tested
+        if not senders:
+            continue
+        num = (_number_group(bank, l4, r.tokens.get((bank, l4), ())),)
+        rng = dict(after=after, before=before)
+        probes += [((bank, l4), Query(family="card_all", senders=senders, extra=num, **rng)),
+                   ((bank, l4), Query(family="card_usage", senders=senders, subject_any=USAGE_WORDS, max_results=1,
+                                      extra=num, **rng)),
+                   ((bank, l4), Query(family="card_life", senders=senders, subject_any=LIFECYCLE_WORDS,
+                                      max_results=20, extra=num, **rng)),
+                   ((bank, l4), Query(family="card_statement", senders=senders, subject_any=("statement",),
+                                      max_results=1, extra=num, **rng)),
+                   ((bank, l4), Query(family="card_pdfs", senders=senders, subject_any=("statement",),
+                                      extra=num + ("has:attachment", "filename:pdf"), **rng))]
+    if not probes:
+        return
+    heads: list[str] = []
+    statements: list[str] = []
+    for ((card, q), (fam, ids)) in zip(probes, _search_all(gmail, st, [q for _, q in probes])):
+        st.per_family[fam] = st.per_family.get(fam, 0) + len(ids)
+        row = index.setdefault(card, {"email_count": 0, "pdf_query": None, "pdf_message_ids": []})
+        if fam == "card_all":
+            row["email_count"] = len(ids)
+            heads += ids[:1] + ids[-1:]
+        elif fam == "card_statement":
+            statements += ids
+        elif fam == "card_pdfs":
+            row["pdf_query"], row["pdf_message_ids"] = q.to_gmail(), ids
+        else:
+            heads += ids
+    r.read(heads)
+    r.read_full(statements)
+
+
 def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date, years: int, *,
                     names: list[str], on_batch: Callable[[ScanStats], None] = lambda s: None,
                     on_window: Callable[[date, int], None] = lambda d, n: None) -> ScanStats:
+    """6-month windows, newest first. In each: search with every known card's number excluded and
+    read what comes back (mail about cards not seen yet); then look up each card found in this
+    window by its number over this window and everything older (its full history), at once.
+
+    Window 1 (last 6 months) finds the cards in use and fetches their 4.5 years of history; window 2
+    finds only cards silent for the last 6 months and fetches their 4 years; and so on. A card is
+    complete (status, first and last seen, add-ons) as soon as it is found, so a scan that pauses
+    for budget leaves finished cards, not half-read ones."""
     from dataclasses import replace as _replace
     t0 = time.monotonic()
     st = ScanStats()
     r = _Reader(gmail, registry, store, names, st, on_batch, t0)
     r.reopen_skimmed()
-
-    # 1. 6-month windows, newest first; each searched until no mail about unknown cards is left
+    start = _years_ago(today, years)
+    index: dict[tuple[str, str], dict] = {}
+    probed: set[tuple[str, str]] = set()
     n_windows = n_rounds = 0
     for after, before in windows(today, years):
         n_windows += 1
-        plan = window_plan(registry, after, before, today)
+        plan = (combined_window_plan if COMBINED_WINDOWS else window_plan)(registry, after, before, today)
         for _ in range(ROUNDS_PER_WINDOW):
             cards = _known_cards(r.known.values())
             excl = tuple(f"-{t}" for b, l4 in cards for t in number_terms(b, l4, r.tokens.get((b, l4), ())))
@@ -447,48 +533,17 @@ def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date
                 break
             r.read(todo[:READS_PER_ROUND])
             if len(todo) <= READS_PER_ROUND:
-                break  # everything this window returned is read; newly found cards are excluded from the next one
-        on_window(after, len(_known_cards(r.known.values())))
-    st.per_family["windows"], st.per_family["rounds"] = n_windows, n_rounds
-
-    # 2. per card: count, newest, oldest, newest usage, lifecycle, newest statement, statement PDFs
-    start = _years_ago(today, years)
-    tested = tuple(registry.test_senders)
-    cards = list(_known_cards(r.known.values()))
-    probes: list[tuple[tuple[str, str], Query]] = []
-    for bank, l4 in cards:
-        senders = tuple(registry.banks[bank].domains if bank in registry.banks else ()) + tested
-        if not senders:
-            continue
-        num = (_number_group(bank, l4, r.tokens.get((bank, l4), ())),)
-        probes += [((bank, l4), Query(family="card_all", senders=senders, after=start, extra=num)),
-                   ((bank, l4), Query(family="card_usage", senders=senders, subject_any=USAGE_WORDS, after=start,
-                                      max_results=1, extra=num)),
-                   ((bank, l4), Query(family="card_life", senders=senders, subject_any=LIFECYCLE_WORDS,
-                                      after=start, max_results=20, extra=num)),
-                   ((bank, l4), Query(family="card_statement", senders=senders, subject_any=("statement",),
-                                      after=start, max_results=1, extra=num)),
-                   ((bank, l4), Query(family="card_pdfs", senders=senders, subject_any=("statement",), after=start,
-                                      extra=num + ("has:attachment", "filename:pdf")))]
-    found = _search_all(gmail, st, [q for _, q in probes])
-    heads: list[str] = []
-    newest_statements: list[str] = []
-    index: dict[tuple[str, str], dict] = {}
-    for ((card, q), (fam, ids)) in zip(probes, found):
-        st.per_family[fam] = st.per_family.get(fam, 0) + len(ids)
-        row = index.setdefault(card, {"email_count": 0, "pdf_query": None, "pdf_message_ids": []})
-        if fam == "card_all":
-            row["email_count"] = len(ids)
-            heads += ids[:1] + ids[-1:]
-        elif fam == "card_statement":
-            newest_statements += ids
-        elif fam == "card_pdfs":
-            row["pdf_query"], row["pdf_message_ids"] = q.to_gmail(), ids
-        else:
-            heads += ids
-    r.read(heads)
-    r.read_full(newest_statements)  # add-on cards are named inside statements
-    store.save_card_index({c: {**v, "number_tokens": sorted(r.tokens.get(c, ()))} for c, v in index.items()})
-    st.per_family["cards_probed"] = len(cards)
+                break  # everything this window returned is read
+        # Cards first seen in this window (or found inside a statement just opened, like add-ons):
+        # their whole history lies in this window and older ones.
+        for _ in range(3):
+            new = [c for c in _known_cards(r.known.values()) if c not in probed]
+            if not new:
+                break
+            probed.update(new)
+            _probe_cards(gmail, registry, st, r, new, start, before, index)
+        store.save_card_index({c: {**v, "number_tokens": sorted(r.tokens.get(c, ()))} for c, v in index.items()})
+        on_window(after, len(probed))
+    st.per_family.update(windows=n_windows, rounds=n_rounds, cards_probed=len(probed))
     st.seconds = round(time.monotonic() - t0, 2)
     return st
