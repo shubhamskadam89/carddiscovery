@@ -1,4 +1,4 @@
-"""API service (FastAPI). Serves the phone-frame page and the endpoints it calls.
+"""API service (FastAPI): the JSON endpoints the separate frontend calls (no pages here).
 
 It can store a Gmail token (sealed with the vault) but never decrypt one: every
 Gmail call after the first sign-in happens in the workers.
@@ -7,14 +7,11 @@ Gmail call after the first sign-in happens in the workers.
 from __future__ import annotations
 
 import json
-import secrets
 import threading
 import time
-from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from carddiscovery.providers import gmail as g
 from carddiscovery.registry import Registry
@@ -32,7 +29,6 @@ class Api:
         self.registry = registry
         self.names = names
         self.vault = Vault("api")
-        self.token = secrets.token_urlsafe(24)
         self.pending: dict[str, dict] = {}
         self.lock = threading.Lock()
 
@@ -151,16 +147,24 @@ class Api:
 
 def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
     api = Api(registry, names)
-    page = (Path(__file__).parent / "static" / "app.html").read_text()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    origin = f"http://127.0.0.1:{config.API_PORT}"
+    origin = f"http://127.0.0.1:{config.API_PORT}"  # where Google's sign-in comes back to
+    frontend = config.FRONTEND_ORIGIN
 
-    def ok_host(req: Request) -> bool:
+    def ok_host(req: Request) -> bool:  # blocks DNS-rebinding: only our own address
         return (req.headers.get("host") or "").lower() in {f"127.0.0.1:{config.API_PORT}", f"localhost:{config.API_PORT}"}
 
-    def ok_token(req: Request) -> bool:
-        given = req.headers.get("x-token") or req.query_params.get("t") or ""
-        return secrets.compare_digest(given, api.token)
+    def ok_origin(req: Request) -> bool:
+        """Every API call must come from the frontend page. Browsers always send Origin on
+        cross-origin fetches, so another web page (or a page opened from mail) can't call us."""
+        return req.headers.get("origin") in config.ALLOWED_ORIGINS
+
+    def cors(resp, req: Request):
+        o = req.headers.get("origin")
+        if o in config.ALLOWED_ORIGINS:
+            resp.headers.update({"Access-Control-Allow-Origin": o, "Access-Control-Allow-Credentials": "true",
+                                 "Vary": "Origin"})
+        return resp
 
     def j(code: int, body) -> JSONResponse:
         return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
@@ -169,9 +173,14 @@ def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
     async def guard(req: Request, call_next):
         if not ok_host(req):
             return j(403, {"error": "bad host"})
-        if req.url.path != "/oauth/callback" and not ok_token(req):
-            return j(403, {"error": "missing or wrong token"})
-        resp = await call_next(req)
+        if req.url.path != "/oauth/callback":
+            if not ok_origin(req):
+                return j(403, {"error": "calls must come from the app page"})
+            if req.method == "OPTIONS":  # CORS preflight for JSON POSTs
+                return cors(JSONResponse({}, headers={
+                    "Access-Control-Allow-Methods": "GET, POST", "Access-Control-Allow-Headers": "Content-Type",
+                    "Access-Control-Max-Age": "600"}), req)
+        resp = cors(await call_next(req), req)
         resp.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
                              "X-Frame-Options": "DENY", "Cache-Control": "no-store",
                              "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; "
@@ -190,14 +199,10 @@ def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
     async def val_err(req, e):
         return j(400, {"error": str(e)})
 
-    @app.get("/")
-    def index():
-        return HTMLResponse(page.replace("__TOKEN__", api.token).replace("__NAMES__", json.dumps(", ".join(names))))
-
     @app.get("/api/config")
     def cfg():
         return {"banks": sorted(b.name for b in registry.banks.values() if b.domains),
-                "test_mode": bool(registry.test_senders)}
+                "test_mode": bool(registry.test_senders), "default_name": ", ".join(names)}
 
     # Stand-in for the separate login service: takes its user id, issues our session.
     @app.post("/api/dev/login")
@@ -271,7 +276,7 @@ def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
             acc = account(c, req)
             if acc and q.get("state"):
                 screen = api.finish_connect(c, acc, q["state"], q.get("code"), q.get("error"))
-        return RedirectResponse(f"{origin}/?t={quote(api.token)}#{screen}", status_code=303)
+        return RedirectResponse(f"{frontend}/#{screen}", status_code=303)
 
     @app.post("/api/scan")
     @authed

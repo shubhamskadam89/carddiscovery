@@ -55,3 +55,8 @@ coverage/
 
 # mini server: master key, logs, simulator tokens and answer file
 .local/
+
+# Only the server is published; the frontend, database setup and docs stay local
+/frontend/
+/db/
+/docs/

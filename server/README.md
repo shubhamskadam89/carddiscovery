@@ -134,25 +134,30 @@ The tests cover the design doc's scenario matrix, the four test-email sets (clea
 Mobile app · AI fallback for emails the rules miss · Outlook · Android SMS · background refresh · backend API. See [docs/mobile-design.md](docs/mobile-design.md) for the plan.
 
 
-## Quick start with Docker (one command)
+## Run the server with Docker
 
-Needs Docker Desktop and a Google OAuth client for a **Desktop app** with the Gmail API enabled
-(download it as `credentials.json` into this folder; it's git-ignored, never commit it). While the
-Google project is in Testing mode, your Gmail address must be listed under **Test users**.
+This repository is the **server** only: API + 2 workers + scheduler. It needs:
+
+- **Postgres:** any database. The server creates its tables on start. The compose file expects
+  one on `127.0.0.1:5434` (user/password `cd`/`cd`, database `carddiscovery`); set
+  `CD_DATABASE_URL` to use another. A one-off way to start one:
+  `docker run -d --name cd-db -e POSTGRES_USER=cd -e POSTGRES_PASSWORD=cd -e POSTGRES_DB=carddiscovery -p 127.0.0.1:5434:5432 postgres:18`
+- **A frontend** served from `http://127.0.0.1:8791` (set `CD_FRONTEND` to change it). The API only
+  accepts calls from that origin and sends the user back there after Google sign-in.
+- **A Google OAuth client** for a **Desktop app** with the Gmail API enabled, saved as
+  `credentials.json` in this folder (git-ignored, never commit it). While the Google project is in
+  Testing mode, your Gmail address must be listed under **Test users**.
 
 ```bash
-docker compose up --build
+docker compose up --build                          # API on http://127.0.0.1:8790
+docker compose exec app python -m cdserver jobs    # Gmail units, time, CPU, memory per job
+docker compose down -v                             # stop and delete the server's data and key
 ```
 
-Open the `http://127.0.0.1:8790/?t=...` link printed in the log, then **Find my cards from Gmail**.
-Postgres runs in its own container; data and the encryption key live in Docker volumes.
-
-```bash
-docker compose logs app | grep API:     # the link again
-docker compose exec app python -m cdserver jobs   # Gmail units, time, CPU, memory per job
-docker compose down                      # stop (keeps data)
-docker compose down -v                   # stop and delete all data, including the key
-```
+API: `POST /api/dev/login {"user": "..."}` (stands in for the login service), `GET /api/me`,
+`GET /api/status`, `GET /api/cards`, `POST /api/connect {"years": 1|3|5, "name": "..."}` (returns
+Google's sign-in URL), `POST /api/scan`, `POST /api/decide {"key", "answer": "yes"|"no"|null}`,
+`POST /api/disconnect`, `POST /api/delete_account`, `GET /api/dev/jobs`.
 
 ## Mini server (`cdserver`)
 
@@ -164,6 +169,7 @@ quota metering and statement PDFs. Login is a separate service; `/api/dev/login`
 pip install -e ".[dev,server]"
 createdb carddiscovery                       # the Mac's default Postgres on localhost:5432
 python -m cdserver dev --name "Your Name"     # API on 127.0.0.1:8790 + 2 workers + scheduler
+                                             # (CD_FRONTEND=http://127.0.0.1:8791 by default)
 python -m cdserver jobs                      # what each job cost: units, time, CPU, memory
 python -m cdserver monitor                   # memory and CPU of every process, until Ctrl+C
 ```

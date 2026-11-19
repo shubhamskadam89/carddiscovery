@@ -27,7 +27,7 @@ include = ["carddiscovery*", "cdserver*"]
 
 [tool.setuptools.package-data]
 carddiscovery = ["data/*.toml", "data/*.json", "data/*.html", "data/*.pem"]
-cdserver = ["migrations/*.sql", "static/*.html"]
+cdserver = ["migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,23 @@
+# Server: API + 2 workers + scheduler. Needs the database running (../db, or any Postgres).
+#   docker compose up --build        API on http://127.0.0.1:8790
+# Open the app from the frontend (../frontend, http://127.0.0.1:8791).
+services:
+  app:
+    build: .
+    environment:
+      # Postgres from ../db, reached through the host. Point it at any Postgres you like.
+      CD_DATABASE_URL: ${CD_DATABASE_URL:-postgresql://cd:cd@host.docker.internal:5434/carddiscovery}
+      CD_FRONTEND: ${CD_FRONTEND:-http://127.0.0.1:8791}   # the only page allowed to call the API
+      CD_BIND: 0.0.0.0
+      CD_HOME: /data                   # master key and server data, kept in the appdata volume
+      CD_GOOGLE_CLIENT: /app/credentials.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # needed on Linux; Docker Desktop has it already
+    ports:
+      - "127.0.0.1:8790:8790"          # this machine only; Google's sign-in returns to this address
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro   # your Google OAuth client (Desktop app); never commit it
+      - appdata:/data
+
+volumes:
+  appdata:

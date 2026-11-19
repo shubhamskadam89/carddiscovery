@@ -44,7 +44,8 @@ def main() -> None:
         from .worker import registry
         db.migrate()
         app, api = create_app(registry(), [n.strip() for n in args.name.split(",") if n.strip()])
-        print(f"API: http://127.0.0.1:{config.API_PORT}/?t={api.token}", flush=True)
+        print(f"API on http://127.0.0.1:{config.API_PORT} (calls allowed from {config.FRONTEND_ORIGIN}). "
+              f"Open the app at {config.FRONTEND_ORIGIN}", flush=True)
         uvicorn.run(app, host=config.API_BIND, port=config.API_PORT, log_level="warning")
     elif args.cmd == "worker":
         from .worker import work
