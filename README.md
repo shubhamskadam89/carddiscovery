@@ -134,6 +134,26 @@ The tests cover the design doc's scenario matrix, the four test-email sets (clea
 Mobile app · AI fallback for emails the rules miss · Outlook · Android SMS · background refresh · backend API. See [docs/mobile-design.md](docs/mobile-design.md) for the plan.
 
 
+## Quick start with Docker (one command)
+
+Needs Docker Desktop and a Google OAuth client for a **Desktop app** with the Gmail API enabled
+(download it as `credentials.json` into this folder; it's git-ignored, never commit it). While the
+Google project is in Testing mode, your Gmail address must be listed under **Test users**.
+
+```bash
+docker compose up --build
+```
+
+Open the `http://127.0.0.1:8790/?t=...` link printed in the log, then **Find my cards from Gmail**.
+Postgres runs in its own container; data and the encryption key live in Docker volumes.
+
+```bash
+docker compose logs app | grep API:     # the link again
+docker compose exec app python -m cdserver jobs   # Gmail units, time, CPU, memory per job
+docker compose down                      # stop (keeps data)
+docker compose down -v                   # stop and delete all data, including the key
+```
+
 ## Mini server (`cdserver`)
 
 The server-side version from [docs/architecture.md](docs/architecture.md) §13, on one machine:

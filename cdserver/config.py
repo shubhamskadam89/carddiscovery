@@ -14,6 +14,9 @@ DATABASE_URL = os.environ.get("CD_DATABASE_URL", f"postgresql://{getpass.getuser
 MASTER_KEY_FILE = Path(os.environ.get("CD_MASTER_KEY", HOME / "master.key"))
 GOOGLE_CLIENT_FILE = Path(os.environ.get("CD_GOOGLE_CLIENT", ROOT / "credentials.json"))
 API_PORT = int(os.environ.get("CD_PORT", "8790"))
+# Address the API listens on. 127.0.0.1 locally; 0.0.0.0 inside Docker, where the compose file
+# publishes the port on the host's 127.0.0.1 only. The browser still opens http://127.0.0.1:8790.
+API_BIND = os.environ.get("CD_BIND", "127.0.0.1")
 
 # Test senders (dev builds only, see carddiscovery.registry.dev_mode): personal
 # addresses whose mail is treated like bank mail, for testing without real cards.

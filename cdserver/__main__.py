@@ -45,7 +45,7 @@ def main() -> None:
         db.migrate()
         app, api = create_app(registry(), [n.strip() for n in args.name.split(",") if n.strip()])
         print(f"API: http://127.0.0.1:{config.API_PORT}/?t={api.token}", flush=True)
-        uvicorn.run(app, host="127.0.0.1", port=config.API_PORT, log_level="warning")
+        uvicorn.run(app, host=config.API_BIND, port=config.API_PORT, log_level="warning")
     elif args.cmd == "worker":
         from .worker import work
         work(once=args.once)

@@ -1,0 +1,10 @@
+.git
+.venv
+.local
+.pytest_cache
+**/__pycache__
+*.db
+*.log
+credentials.json
+token.json
+results*.json
