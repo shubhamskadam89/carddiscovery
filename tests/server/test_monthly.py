@@ -16,8 +16,11 @@ REG = Registry.load()
 
 def test_month_windows_are_back_to_back_newest_first():
     ws = engine.month_windows(date(2026, 11, 20), 3)
-    assert ws[0][1] == date(2026, 11, 21) and len(ws) == 37
-    assert all(a[0] == b[1] for a, b in zip(ws, ws[1:]))
+    assert ws[0][1] == date(2026, 11, 21) and all(a[0] == b[1] for a, b in zip(ws, ws[1:]))
+    assert ws[-1][0] == date(2026, 11, 20) - timedelta(days=365 * 3)    # reaches back exactly 3 years
+    sizes = [(b - a).days for a, b in ws]
+    assert sizes[1:12] == [30] * 11 and max(sizes[12:-1]) == 90       # 12 months one by one, then 3 at a time
+    assert len(ws) == 21                                               # was 37 one-month windows
 
 
 def _m(i, subject, body, days, sender="HDFC Bank <alerts@hdfcbank.net>"):

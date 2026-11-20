@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from carddiscovery.explain import explain
+from carddiscovery.explain import emails, explain
 from carddiscovery.registry import Registry
 from carddiscovery.resolve import resolve, resolve_full
 from carddiscovery.score import group, score_all
@@ -39,7 +39,8 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
                 "evidence": e.evidence, "concerns": e.concerns, "question": e.question,
                 "decision": card.decision, "bank": card.bank_id, "last4": card.last4, "product": card.product,
                 "group": g, "first_seen": card.first_seen.isoformat() if card.first_seen else None,
-                "last_seen": card.last_seen.isoformat() if card.last_seen else None}
+                "last_seen": card.last_seen.isoformat() if card.last_seen else None,
+                "emails": emails(card), "email_count": len(card.evidence)}
         rows.append((account_id, card.decision_key, card.bank_id, card.last4, card.product, g, json.dumps(view)))
     with c.transaction():
         c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (account_id,))

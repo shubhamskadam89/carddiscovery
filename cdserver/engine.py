@@ -611,7 +611,10 @@ MONTHLY_SUBJECTS = ("card",)
 # is left out of later months' searches, which is free, instead of read every month at 20
 # units each. Every RECHECK_EVERY months it's searched again, so a new card on the same
 # template (a replacement, an add-on) still shows up.
-REPEAT_SUBJECT_LIMIT = 4
+REPEAT_SUBJECT_LIMIT = 2
+# OTP emails only ever confirm a card other mail already shows (SBI sends one per purchase), so
+# the month-by-month search leaves them out: about a fifth of a heavy card user's card mail.
+MONTHLY_EXCLUDE = ("otp", "one time password")
 RECHECK_EVERY = 6
 MAX_SUBJECT_EXCLUSIONS = 15
 # The lifecycle pass after the main scan: dormant and closed cards often send only these.
@@ -619,13 +622,21 @@ LIFECYCLE_SUBJECTS = FAMILIES["onboarding"] + FAMILIES["lifecycle"]
 MONTH_DAYS = 30
 
 
-def month_windows(today: date, years: int) -> list[tuple[date, date]]:
-    """One-month windows (30 days), newest first, back `years` years. Ends are exclusive."""
-    end = today + timedelta(days=1)
-    out = []
-    for k in range(-(-365 * years // MONTH_DAYS)):
-        before = end if k == 0 else today - timedelta(days=MONTH_DAYS * k)
-        out.append((today - timedelta(days=MONTH_DAYS * (k + 1)), before))
+RECENT_MONTHS = 12   # one month at a time this far back: cards in use show up month by month
+OLDER_WINDOW_DAYS = 90  # older mail is sparse: three months per window, a third of the searches
+
+
+def month_windows(today: date, years: int, recent: int | None = None) -> list[tuple[date, date]]:
+    """Windows newest first, back `years` years, ends exclusive: 30 days each for the last
+    `recent` months, then 90 days each (a window that would cross the start is cut there)."""
+    recent = RECENT_MONTHS if recent is None else recent
+    start = today - timedelta(days=365 * years)
+    out, before = [], today + timedelta(days=1)
+    while before > start:
+        size = MONTH_DAYS if len(out) < recent else OLDER_WINDOW_DAYS
+        after = max(start, (today if not out else before) - timedelta(days=size))
+        out.append((after, before))
+        before = after
     return out
 
 
@@ -649,7 +660,8 @@ def windowed_subject_scan(gmail, registry: Registry, store: EvidenceStore,
                 s for s, n in sorted(r.subjects.items(), key=lambda x: -x[1])
                 if n >= REPEAT_SUBJECT_LIMIT)[:MAX_SUBJECT_EXCLUSIONS]
             st.per_family["subjects_skipped"] = len(repeats)
-            plan = [Query(family=family, senders=g, subject_any=subjects, exclude_subject=NOISE_SUBJECT + repeats,
+            skip = NOISE_SUBJECT + (MONTHLY_EXCLUDE if family == "monthly" else ()) + repeats
+            plan = [Query(family=family, senders=g, subject_any=subjects, exclude_subject=skip,
                           after=after, before=before, extra=NO_PROMOS + excl) for g in _sender_groups(registry)]
             results = _search_all(gmail, st, plan)
             for fam, ids in results:

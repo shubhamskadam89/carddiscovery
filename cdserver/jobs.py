@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -42,7 +43,10 @@ class Job:
         self.id, self.account_id, self.kind = row["id"], row["account_id"], row["kind"]
         self.messages: list[str] = list((row.get("progress") or {}).get("messages", []))
         self.stats: dict = {}
-        self.dev: dict = {}  # for the developer panel: step, month being checked, PDF counts
+        # For the developer panel: step, month being checked, PDF counts, and units and seconds per
+        # step. Carried over from the last run, so a scan that paused and resumed keeps its totals.
+        self.dev: dict = dict((row.get("progress") or {}).get("dev") or {})
+        self._mark = (0, time.monotonic())  # units and clock when the current step's tally last moved
         self.conn = c.execute("SELECT * FROM gmail_connections WHERE account_id = %s",
                               (self.account_id,)).fetchone()
         self.meter = Meter(config.BUDGETS[self.kind], on_flush=self._flush)
@@ -52,9 +56,20 @@ class Job:
     def progress(self) -> dict:
         return {"messages": self.messages[-12:], "stats": self.stats, "meter": self.meter.summary(), "dev": self.dev}
 
+    def tally(self) -> None:
+        """Add the units and seconds spent since the last tally to the current step's totals."""
+        units, t = self.meter.units, time.monotonic()
+        step = self.dev.get("step")
+        if step:
+            per = self.dev.setdefault("steps_cost", {}).setdefault(step, {"units": 0, "secs": 0.0})
+            per["units"] += units - self._mark[0]
+            per["secs"] = round(per["secs"] + t - self._mark[1], 1)
+        self._mark = (units, t)
+
     def _flush(self, meter: Meter) -> None:
         if self._gmail is not None:
             meter.throttled, meter.backoff_s = self._gmail.throttled, self._gmail.backoff_s
+        self.tally()
         queue.heartbeat(self.c, self.id, meter.unflushed, self.progress())
         r = self.c.execute("SELECT cancel_requested, status FROM gmail_connections WHERE account_id = %s",
                            (self.account_id,)).fetchone()
@@ -164,6 +179,8 @@ def _monthly_full_scan(j: Job, years: int, consent: bool, on_batch):
             ("lifecycle", len(lifecycle))]
 
     def step(name, i, after=None, before=None, total=None, label=None):
+        if j.dev.get("step") != name:
+            j.tally()  # close the previous step's units and time before this one starts
         j.dev.update(step=name, steps=plan, window_index=i, window_total=total or dict(plan)[name],
                      window=[after.isoformat(), before.isoformat()] if after else None, label=label,
                      pdfs_consent=consent)
@@ -215,6 +232,7 @@ def _monthly_full_scan(j: Job, years: int, consent: bool, on_batch):
 
     life = windowed_subject_scan(j.gmail, j.registry, store, lifecycle, LIFECYCLE_SUBJECTS,
                                  names=j.names(), on_batch=on_batch, family="lifecycle", on_window=life_shown)
+    j.tally()
     j.dev.update(step="done", window_index=len(lifecycle), label=None)
     st.header_reads += life.header_reads
     st.searches += life.searches

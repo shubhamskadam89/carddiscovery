@@ -39,6 +39,40 @@ def month(d: datetime | None) -> str:
     return d.strftime("%b %Y") if d else "unknown date"
 
 
+EMAILS_SHOWN = 25
+
+
+def emails(card: Card, limit: int = EMAILS_SHOWN) -> list[dict]:
+    """The emails behind a card, for "where did you see this?": the newest of each kind first
+    (so 200 alerts don't hide the one welcome email), then the newest of the rest. Only what
+    evidence keeps: date, kind, what it showed, and the Gmail message id to open it. No subject
+    or other email text: that's never stored, and opening the email in Gmail shows it."""
+    evs = sorted(card.evidence, key=lambda e: e.date, reverse=True)
+    first, rest, seen = [], [], set()
+    for e in evs:
+        (rest if e.type in seen else first).append(e)
+        seen.add(e.type)
+    out = []
+    for e in (first + rest)[:limit]:
+        showed = []
+        if e.last4s:
+            showed.append(" ".join(f"••{x}" for x in e.last4s[:3]))
+        elif e.last_digits:
+            showed.append(f"ending {e.last_digits}")
+        if e.product:
+            showed.append(e.product)
+        pdf = e.message_id.endswith("#pdf")
+        out.append({
+            "id": e.message_id.split("#")[0],  # Gmail's message id (a PDF's row points to its email)
+            "date": e.date.date().isoformat(),
+            "kind": ("statement PDF" if pdf else _NOUN.get(e.type, ("email",))[0]),
+            "showed": ", ".join(showed) or None,
+            "via": e.via, "forwarded": e.forwarded,
+        })
+    out.sort(key=lambda x: x["date"], reverse=True)
+    return out
+
+
 @dataclass
 class Explanation:
     title: str            # "HDFC Bank Regalia Gold ••7410"
