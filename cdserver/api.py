@@ -314,6 +314,69 @@ def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
         r.delete_cookie(COOKIE, path="/")
         return r
 
+    # ---- dev: one button for a fresh test run. Drops what earlier scans found (cards, evidence,
+    # statement reads) but keeps the Gmail connection and the user's yes/no answers, then starts
+    # the quick scan, which queues the statements step and the full scan after it.
+    @app.post("/api/dev/fresh_scan")
+    @authed
+    def dev_fresh_scan(c, acc, b, req):
+        a = acc["id"]
+        conn = c.execute("SELECT status FROM gmail_connections WHERE account_id = %s", (a,)).fetchone()
+        if not conn or conn["status"] != "active":
+            return j(409, {"error": "Gmail isn't connected. Connect it first."})
+        if c.execute("SELECT 1 FROM jobs WHERE account_id = %s AND status = 'running'", (a,)).fetchone():
+            return j(409, {"error": "A scan is running. Wait for it to finish."})
+        with c.transaction():
+            c.execute("DELETE FROM jobs WHERE account_id = %s AND status = 'queued'", (a,))
+            for t in ("evidence", "statement_facts", "card_index", "set_aside", "statement_pdf_reads"):
+                c.execute(f"DELETE FROM {t} WHERE account_id = %s", (a,))
+            c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (a,))
+            c.execute("UPDATE gmail_connections SET last_synced_at = NULL WHERE account_id = %s", (a,))
+            job = queue.enqueue(c, "discover_quick", a)
+        return {"started": job is not None, "job": job}
+
+    # ---- dev: live numbers for the side panel (counts and dates only; no email text)
+    @app.get("/api/dev/live")
+    @authed
+    def dev_live(c, acc, b, req):
+        a = acc["id"]
+        jobs_ = c.execute("SELECT id, kind, status, units_used, attempts, last_error, progress, "
+                          "started_at, finished_at, run_after, "
+                          "round(extract(epoch FROM coalesce(finished_at, now()) - started_at)::numeric, 1) AS secs "
+                          "FROM jobs WHERE account_id = %s ORDER BY id DESC LIMIT 10", (a,)).fetchall()
+        cur = next((x for x in jobs_ if x["status"] in ("running", "queued")), jobs_[0] if jobs_ else None)
+        current = None
+        if cur:
+            pr = cur["progress"] or {}
+            current = {"id": cur["id"], "kind": cur["kind"], "status": cur["status"], "secs": cur["secs"],
+                       "units": cur["units_used"], "meter": pr.get("meter"), "stats": pr.get("stats"),
+                       "dev": pr.get("dev"), "last": (pr.get("messages") or [])[-1:],
+                       "run_after": cur["run_after"].isoformat() if cur["status"] == "queued" else None,
+                       "error": cur["last_error"]}
+        pdfs = {r["outcome"]: r["n"] for r in c.execute(
+            "SELECT outcome, count(*) AS n FROM statement_pdf_reads WHERE account_id = %s GROUP BY outcome", (a,))}
+        attach = sum(((x["progress"] or {}).get("meter") or {}).get("calls", {}).get("attachment", 0) for x in jobs_)
+        ev = {r["type"]: r["n"] for r in c.execute(
+            "SELECT data->>'type' AS type, count(*) AS n FROM evidence WHERE account_id = %s GROUP BY 1 ORDER BY 2 DESC", (a,))}
+        span = c.execute("SELECT min((data->>'date')::timestamptz)::date AS oldest, "
+                         "max((data->>'date')::timestamptz)::date AS newest FROM evidence WHERE account_id = %s", (a,)).fetchone()
+        grp = {r["grp"]: r["n"] for r in c.execute(
+            "SELECT grp, count(*) AS n FROM cards WHERE account_id = %s GROUP BY grp", (a,))}
+        banks = [dict(r) for r in c.execute(
+            "SELECT bank_id, count(*) AS n FROM cards WHERE account_id = %s AND grp = 'owned' "
+            "GROUP BY bank_id ORDER BY 2 DESC, 1", (a,))]
+        day = c.execute("SELECT units FROM quota_daily WHERE day = current_date").fetchone()
+        mine = c.execute("SELECT coalesce(sum(units_used), 0) AS u FROM jobs WHERE account_id = %s "
+                         "AND created_at >= current_date", (a,)).fetchone()["u"]
+        return {"scan_mode": config.SCAN_MODE, "current": current,
+                "jobs": [{"id": x["id"], "kind": x["kind"], "status": x["status"], "units": x["units_used"],
+                          "secs": x["secs"]} for x in jobs_],
+                "pdfs": {"outcomes": pdfs, "attachments_downloaded": attach},
+                "evidence": {"by_type": ev, "oldest": span and span["oldest"] and span["oldest"].isoformat(),
+                             "newest": span and span["newest"] and span["newest"].isoformat()},
+                "cards": {"by_group": grp, "owned_by_bank": banks},
+                "quota": {"account_today": mine, "all_accounts_today": day and day["units"]}}
+
     # ---- dev: what each job cost (units, time); no email content
     @app.get("/api/dev/jobs")
     def dev_jobs():

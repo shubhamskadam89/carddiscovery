@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -21,7 +22,8 @@ from carddiscovery.queries import Query
 from carddiscovery.registry import Registry
 
 from . import cards, config, pdf, queue
-from .engine import (EvidenceStore, card_aware_scan, subject_scan, full_plan, number_terms, quick_plan, scan, since_date,
+from .engine import (EvidenceStore, card_aware_scan, half_card_lookup, half_cards, _years_ago, subject_scan, windowed_subject_scan, month_windows,
+                     year_windows, MONTHLY_SUBJECTS, LIFECYCLE_SUBJECTS, full_plan, number_terms, quick_plan, scan, since_date,
                      statement_plan,
                      sync_plan)
 from .gmailx import Cancelled, Meter, MeteredGmail
@@ -40,6 +42,7 @@ class Job:
         self.id, self.account_id, self.kind = row["id"], row["account_id"], row["kind"]
         self.messages: list[str] = list((row.get("progress") or {}).get("messages", []))
         self.stats: dict = {}
+        self.dev: dict = {}  # for the developer panel: step, month being checked, PDF counts
         self.conn = c.execute("SELECT * FROM gmail_connections WHERE account_id = %s",
                               (self.account_id,)).fetchone()
         self.meter = Meter(config.BUDGETS[self.kind], on_flush=self._flush)
@@ -47,7 +50,7 @@ class Job:
 
     # progress, heartbeat and the cancel check, about once a second
     def progress(self) -> dict:
-        return {"messages": self.messages[-12:], "stats": self.stats, "meter": self.meter.summary()}
+        return {"messages": self.messages[-12:], "stats": self.stats, "meter": self.meter.summary(), "dev": self.dev}
 
     def _flush(self, meter: Meter) -> None:
         if self._gmail is not None:
@@ -131,6 +134,93 @@ def discover_quick(j: Job) -> None:
     queue.enqueue(j.c, "discover_full", j.account_id)
 
 
+PDF_MONTHS_BACK = 6  # the monthly mode reads incomplete cards' statements this far back
+
+
+def _cards_by_bank(j: Job) -> str:
+    rows = j.c.execute("SELECT bank_id, count(*) AS n FROM cards WHERE account_id = %s AND source = 'gmail' "
+                       "AND grp IN ('owned', 'review') GROUP BY bank_id ORDER BY count(*) DESC, bank_id",
+                       (j.account_id,)).fetchall()
+    return ", ".join(f"{j.registry.banks[r['bank_id']].name if r['bank_id'] in j.registry.banks else r['bank_id']} "
+                     f"{r['n']}" for r in rows)
+
+
+def _monthly_full_scan(j: Job, years: int, consent: bool, on_batch):
+    """CD_SCAN_MODE=monthly, in three steps:
+    1. month by month, newest first, over every year chosen: subjects only, for mail saying
+       "credit card" or a card statement, with the cards found so far excluded; the app shows
+       the cards per bank after each month;
+    2. cards still missing their number or product: their statement emails over the last 6
+       months, one month at a time, newest first: the email in full, then the PDF only if the
+       card is still incomplete (PDFs only with the user's consent and secrets);
+    3. a lifecycle pass (welcome, dispatch, fee, renewal, closure) over every year, for dormant
+       and closed cards that rarely send anything else."""
+    store = EvidenceStore(j.c, j.account_id)
+    today = date.today()
+
+    months = month_windows(today, years)
+    lifecycle = year_windows(today, years)
+    plan = [("subjects", len(months)), ("half cards", 0), ("statements", PDF_MONTHS_BACK),
+            ("lifecycle", len(lifecycle))]
+
+    def step(name, i, after=None, before=None, total=None, label=None):
+        j.dev.update(step=name, steps=plan, window_index=i, window_total=total or dict(plan)[name],
+                     window=[after.isoformat(), before.isoformat()] if after else None, label=label,
+                     pdfs_consent=consent)
+
+    done = iter(range(1, len(months) + 1))
+    step("subjects", 0, *months[0])
+
+    def shown(after, before):
+        j.rebuild()
+        i = next(done)
+        if i < len(months):
+            step("subjects", i, *months[i])
+        j.say(f"Checked {after:%b %Y}: {_cards_by_bank(j)}")
+
+    st = windowed_subject_scan(j.gmail, j.registry, store, months, MONTHLY_SUBJECTS,
+                               names=j.names(), on_batch=on_batch, on_window=shown)
+    # Cards known by number only or by name only: look for the other half, offers included.
+    half = half_cards(store.known().values())
+    tally = j.dev.setdefault("half_cards", {"total": len(half), "completed": 0})
+    if half:
+        step("half cards", 0, total=len(half), label="looking up")
+
+        def card_done(i, n, bank, want, value, found):
+            tally["completed"] += int(found)
+            what = f"••{value}" if want == "name" else value
+            res = "found" if found else "not found"
+            step("half cards", i + 1, total=n, label=f"{bank} {what}: {want} {res}")
+            j.rebuild()
+            j.say(f"Looked up the {want} of {bank} {what}: {res}")
+
+        hs = half_card_lookup(j.gmail, j.registry, store, _years_ago(today, years), names=j.names(),
+                              on_batch=on_batch, on_card=card_done)
+        st.header_reads += hs.header_reads
+        st.full_reads += hs.full_reads
+        st.searches += hs.searches
+    secrets = _pdf_secrets(j)
+    for i, (after, before) in enumerate(month_windows(today, 1)[:PDF_MONTHS_BACK]):
+        step("statements", i, after, before)
+        read_statement_gaps(j, *secrets, pdfs=consent, window=(after, before))
+        j.say(f"Statements of {after:%b %Y} checked for incomplete cards: {_cards_by_bank(j)}")
+    done_life = iter(range(1, len(lifecycle) + 1))
+    step("lifecycle", 0, *lifecycle[0])
+
+    def life_shown(after, before):
+        i = next(done_life)
+        if i < len(lifecycle):
+            step("lifecycle", i, *lifecycle[i])
+        j.say(f"Lifecycle mail before {before:%b %Y} checked")
+
+    life = windowed_subject_scan(j.gmail, j.registry, store, lifecycle, LIFECYCLE_SUBJECTS,
+                                 names=j.names(), on_batch=on_batch, family="lifecycle", on_window=life_shown)
+    j.dev.update(step="done", window_index=len(lifecycle), label=None)
+    st.header_reads += life.header_reads
+    st.searches += life.searches
+    return st
+
+
 def discover_full(j: Job) -> None:
     years = j.conn["years"]
     j.say(f"Checking {years} years of bank email")
@@ -141,7 +231,9 @@ def discover_full(j: Job) -> None:
         j.say(f"Read {st.header_reads} emails ({st.full_reads} in full)")
 
     consent = bool(j.conn["pdf_opt_in"] and config.READ_STATEMENT_PDFS)
-    if config.SCAN_MODE == "subjects":
+    if config.SCAN_MODE == "monthly":
+        st = _monthly_full_scan(j, years, consent, on_batch)
+    elif config.SCAN_MODE == "subjects":
         st = subject_scan(j.gmail, j.registry, EvidenceStore(j.c, j.account_id), date.today(), years,
                           names=j.names(), on_batch=on_batch,
                           on_window=lambda d, n: j.say(f"Checked back to {d:%b %Y}: {n} cards so far"),
@@ -184,7 +276,8 @@ def token_check(j: Job) -> None:
 
 # ---------------------------------------------------------------- statement PDFs
 
-def statement_gaps(known: dict, tried: dict[str, str], complete: list | None = None) -> list:
+def statement_gaps(known: dict, tried: dict[str, str], complete: list | None = None,
+                   window: tuple[date, date] | None = None) -> list:
     """Statement emails to open first: per group of statements missing the card number or the
     product ("HSBC Live+", no number; "Axis MY Zone", ending XX30; "HDFC ••3254", no product),
     the newest one not tried yet. A group is skipped when its subject or body already ties it
@@ -193,6 +286,8 @@ def statement_gaps(known: dict, tried: dict[str, str], complete: list | None = N
     of its emails was already read."""
     statements = [e for e in known.values() if e.type == T.STATEMENT and e.bank_id
                   and not e.message_id.endswith("#pdf") and not (e.last4s and e.product)]
+    if window:  # one month at a time: only that month's statement emails
+        statements = [e for e in statements if window[0] <= e.date.date() < window[1]]
     settled = [e for e in known.values() if e.message_id.endswith("#pdf") and e.last4s and e.product]
     complete = complete or []
 
@@ -234,7 +329,8 @@ STATEMENT_TRIES_PER_GROUP = 2  # newest first; a second try covers a statement e
 UNKNOWN_GROUP_TRIES = 6
 
 
-def read_statement_gaps(j: Job, name: str | None, dob: date | None, pdfs: bool = True) -> int:
+def read_statement_gaps(j: Job, name: str | None, dob: date | None, pdfs: bool = True,
+                        window: tuple[date, date] | None = None) -> int:
     """Statement first: a statement PDF names the bank, the card number and the product at
     once, which settles a card that other mail only half-describes. The newest PDF of each
     group in statement_gaps() is opened in memory; its card number(s) and product become an
@@ -256,7 +352,7 @@ def read_statement_gaps(j: Job, name: str | None, dob: date | None, pdfs: bool =
         tried = {m: o for m, o in tried.items() if o != "checked"}
     # Cards already known with number and product: their statements need no PDF.
     complete = [c for c in resolve_full(list(known.values())).cards if c.last4 and c.product_history]
-    gaps = statement_gaps(known, tried, complete)
+    gaps = statement_gaps(known, tried, complete, window)
     if not gaps:
         j.rebuild()
         return 0
@@ -266,7 +362,10 @@ def read_statement_gaps(j: Job, name: str | None, dob: date | None, pdfs: bool =
         if e.bank_id and e.type not in (T.NOT_CREDIT_CARD, T.PROMOTIONAL):
             bank_l4s.setdefault(e.bank_id, set()).update(e.last4s)
 
+    pdf_dev = j.dev.setdefault("statement_reads", {})
+
     def record(mid: str, bank: str, outcome: str) -> None:
+        pdf_dev[outcome] = pdf_dev.get(outcome, 0) + 1
         j.c.execute("INSERT INTO statement_pdf_reads (account_id, message_id, bank_id, outcome, pdf_version) VALUES "
                     "(%s, %s, %s, %s, %s) ON CONFLICT (account_id, message_id) DO UPDATE SET outcome = EXCLUDED.outcome, "
                     "pdf_version = EXCLUDED.pdf_version, read_at = now()",
@@ -299,29 +398,48 @@ def read_statement_gaps(j: Job, name: str | None, dob: date | None, pdfs: bool =
         if not attachments:
             record(e.message_id, e.bank_id, "no_pdf")
             continue
+        # How the PDF is locked: what the email says, else what this bank is known to use. A PDF
+        # that needs what we don't have (HSBC: 6 digits of the card number) isn't downloaded.
+        l4s = sorted(bank_l4s.get(e.bank_id, ()))
+        rule = pdf.password_rule(meta.text())
+        rules = [rule] if rule else pdf.PATTERNS.get(e.bank_id, [])
+        if rules and not any(pdf.can_open(r, bool(name), bool(dob), l4s) for r in rules):
+            record(e.message_id, e.bank_id, "password")
+            locked = j.dev.setdefault("pdfs_not_downloaded", {})
+            locked[e.bank_id] = locked.get(e.bank_id, 0) + 1
+            continue
         outcome = "no_number"
-        for _, att in attachments[:2]:
+        for att_name, att in [a for a in attachments if not re.search(r"terms|mitc|conditions", a[0], re.I)][:2]:
             if j.meter.affordable("attachment") < 1:
                 break
             data = j.gmail.attachment(e.message_id, att)
-            keyed = pdf.keyed_candidates(e.bank_id, name, dob, sorted(bank_l4s.get(e.bank_id, ())))
+            keyed = pdf.keyed_candidates(e.bank_id, name, dob, l4s, rule)
             try:
                 text, used = pdf.open_pdf_with(data, [pw for pw, _ in keyed])
             except pdf.PasswordNeeded:
                 outcome = "password"
+                data = None
                 j.c.execute("INSERT INTO notifications (account_id, kind, detail) VALUES (%s, 'pdf_password', %s)",
                             (j.account_id, json.dumps({"bank": e.bank_id})))
                 continue
             except Exception:  # a PDF the library can't parse: record it, never download it again
                 outcome = "unreadable"
+                data = None
                 continue
-            finally:
-                data = None  # the PDF lives only in this loop
             unlocked_by = dict(keyed).get(used) if used else None  # SBI: the last 4 in the password
             card = pdf.card_identity(text, j.registry, e.bank_id, known=bank_l4s.get(e.bank_id, set()),
                                      unlocked_by=unlocked_by, partial_hint=e.last_digits)
             facts = pdf.parse(text)
             text = None
+            if card.last4s and not card.product and not fresh.product:
+                # The text doesn't name the card (ICICI, RBL print it only as a logo): read the
+                # bank's logo spot on page 1. Only a product name is taken, and only a clear match.
+                catalog = sorted({p for _, p in j.registry.banks[e.bank_id].product_patterns})
+                named = pdf.product_by_ocr(data, used, e.bank_id, catalog)
+                if named:
+                    card.product, card.products = named, [named] + [p for p in card.products if p != named]
+                    j.dev["ocr_named"] = j.dev.get("ocr_named", 0) + 1
+            data = None  # the PDF lives only in this loop
             if not card.last4s:
                 continue
             store.save([Evidence(
@@ -402,6 +520,9 @@ def pdf_enrich(j: Job) -> None:
         found[i] = ids
     added = skipped = 0
     for (bank, l4), ids in zip(cards_, found):
+        rules = pdf.PATTERNS.get(bank, [])
+        if rules and not any(pdf.can_open(r, bool(name), bool(dob), sorted(by_bank[bank])) for r in rules):
+            continue  # locked with what we can't have (HSBC: 6 digits of the card): don't download it
         for mid in ids:
             if mid in done_ids:
                 skipped += 1  # already have this statement

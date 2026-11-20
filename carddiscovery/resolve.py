@@ -115,7 +115,12 @@ def resolve_full(evidence: list[Evidence]) -> Resolution:
         if primary is not None:
             primary.evidence.append(ev)
         if ev.type == T.OFFER_EXISTING_CARD:
-            continue  # products in an offer are what's being sold, not what's held
+            # Products in an offer are what's being sold, not what's held, unless the offer
+            # names the card with its number ("your HSBC Visa Platinum Credit Card ending
+            # with 9719"): the number and the product side by side, as in a statement.
+            if ev.held and ev.product and primary is not None:
+                primary.product_history.append((ev.date, ev.product))
+            continue
         if primary is not None:
             if ev.type == T.UPGRADE and ev.products:
                 # Same number, new variant.

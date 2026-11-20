@@ -10,7 +10,7 @@
     ],
     "otp": "\\botp\\b|one[\\s-]time[\\s-]password|verification code",
     "offer": "pre[\\s-]?approved|apply now|apply today|apply here|upgrade now|eligible for|you are eligible|you're eligible|limited (period|time)|exclusive offer|instant approval|get (a|your|an)\\b.{0,30}\\bcard|\\bavail\\b|hurry|last chance|\\d+\\s?% off|introducing|invitation|special offer|offer for you|unlock|grab|don't miss|do not miss|apply for|exclusive(ly)? for you|festive|offer valid|\\bearn \\d+\\s?x\\b|\\d+x (reward|points)|\\bupgrade to (the|an?)\\b",
-    "non_credit": "debit card|savings account|\\ba/c\\b|account no|\\bloan\\b|fixed deposit|\\bfd\\b|demat|mutual fund|insurance|\\bupi\\b|net ?banking|current account|\\bimps\\b|\\bneft\\b|\\brtgs\\b|\\bnach\\b|\\becs\\b|account balance",
+    "non_credit": "debit card|savings account|\\ba/c\\b|account no|\\bloan\\b|fixed deposit|\\bfd\\b|demat|mutual fund|insurance|\\bupi\\b|net ?banking|current account|\\bimps\\b|\\bneft\\b|\\brtgs\\b|\\bnach\\b|\\becs\\b|account balance|mobile banking|banking app|mobile app|\\bcrn\\b",
     "credit_words": "credit card|\\bcc\\b|charge card|card ?member",
     "boilerplate": "reserve bank of india|\\brbi\\b|ombudsman|grievance|nodal officer|never ask|do not share|don't share|system[- ]generated|do not reply|unsubscribe|registered office|\\bcin\\b|disclaimer|intended recipient|all rights reserved|registered trademark|most important terms|\\bmitc\\b|regret any inconvenience|toll[- ]free|report (it )?immediately|to block your card|sms block|view (this email )?in (your )?browser|stay safe|customer care",
     "rules": [

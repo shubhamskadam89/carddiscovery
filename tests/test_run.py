@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
 
@@ -40,7 +41,8 @@ class FakeGmail:
                 continue
             if q.text_any and not any(t.lower() in m.text().lower() for t in q.text_any):
                 continue
-            if any(t.lower() in m.subject.lower() for t in q.exclude_subject):
+            # Gmail's -subject: matches whole words: -subject:debit doesn't drop "Rs.500 debited".
+            if any(re.search(rf"(?<!\w){re.escape(t.lower())}(?!\w)", m.subject.lower()) for t in q.exclude_subject):
                 continue
             out.append(m.message_id)
         return out[: q.max_results] if q.max_results else out

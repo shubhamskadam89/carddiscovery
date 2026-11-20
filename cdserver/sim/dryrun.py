@@ -76,6 +76,11 @@ class LocalBox:
                 if not (any(words(t, subj) for t in subj_terms) or any(words(t, hay) for t in text_terms)):
                     return False
                 continue
+            if ":" not in e and not e.startswith(("(", "-")):
+                # A plain word or "quoted phrase": Gmail requires it somewhere in the email.
+                if not words(e.strip('"'), (m.subject + " " + m.text).lower()):
+                    return False
+                continue
             if e.startswith("(") or (e.startswith("-") and ":" not in e):
                 # Gmail matches whole words, case-insensitively ("XX2846" is one word, "2846" another)
                 tokens = tokens or set(re.findall(r"[a-z0-9]+", (m.subject + " " + m.text).lower()))
@@ -143,4 +148,26 @@ def run(c, account_id: int, mails: list[Mail], to: str, registry, years: int, na
             if rounds > 10:
                 break
     cards.rebuild(c, account_id, registry)
+    return out
+
+
+def run_monthly(c, account_id: int, mails: list[Mail], to: str, registry, today: date, names: list[str]) -> list[dict]:
+    """CD_SCAN_MODE=monthly over the emails in memory: month-by-month subjects, the half-card
+    lookup, then the lifecycle pass (the statement-PDF step needs a job and is left out)."""
+    from .. import cards
+    from ..engine import (LIFECYCLE_SUBJECTS, MONTHLY_SUBJECTS, EvidenceStore, half_card_lookup, month_windows,
+                          windowed_subject_scan, year_windows, _years_ago)
+    steps = [("months", lambda box, store: windowed_subject_scan(box, registry, store, month_windows(today, 1),
+                                                                 MONTHLY_SUBJECTS, names=names)),
+             ("half cards", lambda box, store: half_card_lookup(box, registry, store, _years_ago(today, 1),
+                                                                names=names)),
+             ("lifecycle", lambda box, store: windowed_subject_scan(box, registry, store, year_windows(today, 1),
+                                                                    LIFECYCLE_SUBJECTS, names=names,
+                                                                    family="lifecycle"))]
+    out = []
+    for kind, step in steps:
+        m = Meter(10**7, per_minute=10**9)
+        st = step(LocalBox(mails, to, m), EvidenceStore(c, account_id))
+        cards.rebuild(c, account_id, registry)
+        out.append({"kind": kind, **st.as_dict(), **m.summary()})
     return out

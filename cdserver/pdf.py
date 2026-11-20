@@ -16,14 +16,78 @@ from datetime import date, datetime
 from pypdf import PdfReader
 
 PATTERNS: dict[str, list[str]] = {
-    "hdfc": ["{N4}{DDMM}"],
+    "hdfc": ["{N4}{L4}"],               # card number needed (found on real statements, 2026-11)
     "icici": ["{n4}{DDMM}"],
     "axis": ["{N4}{DDMM}"],
-    "sbi": ["{DDMMYYYY}{L4}"],
+    "sbi": ["{DDMMYYYY}{L4}"],          # card number needed
+    "hsbc": ["{DDMMYY}{L6}"],           # 6 digits of the card number: never known, so never opened
     "kotak": ["{n4}{DDMM}"],
-    "amex": [],
+    "amex": ["{DDMMYYYY}"],
     "*": ["{N4}{DDMM}", "{n4}{DDMM}", "{DDMMYYYY}", "{DDMMYY}", "{DDMM}{L4}", "{DDMMYYYY}{L4}"],
 }
+
+# ---------------------------------------------------------------- the password rule an email states
+# Statement emails usually say how the PDF is locked: "Your password is a combination of your date
+# of birth (in DDMMYY format) followed by the last 6 digits of the primary credit card number"
+# (HSBC), "first 4 letters of your name ... followed by Date of Birth in DDMM format ... lowercase"
+# (ICICI), "Enter your date of birth in DDMMYYYY format" (Amex). Read that, and a PDF that needs
+# what we don't have isn't downloaded at all.
+_PW_CONTEXT = re.compile(r"password|unlock|open (?:the|this) (?:attachment|statement|document|pdf)|"
+                         r"access (?:your|the) e-?statement", re.I)
+# Lines that mention card digits for something else: ICICI's "Pay from any UPI app to ccpay.<mobile>
+# <last 4 digits of Credit Card number>@icici", just above its password instructions.
+_PW_NOT_RULE = re.compile(r"\bupi\b|@|ccpay|\bpay\s+(?:from|using|via)\b", re.I)
+_PW_PARTS = [
+    ("{L6}", re.compile(r"last\s+(?:6|six)\s+digits", re.I)),
+    ("{L4}", re.compile(r"last\s+(?:4|four)\s+digits\s+of\s+(?:your\s+|the\s+)?(?:primary\s+)?(?:credit\s+)?card", re.I)),
+    ("{NAME}", re.compile(r"first\s+(?:4|four)\s+(?:letters|characters)\s+of\s+(?:your\s+)?(?:first\s+)?name", re.I)),
+    ("{DDMMYYYY}", re.compile(r"\bDDMMYYYY\b|\bDD/?MM/?YYYY\b", re.I)),
+    ("{DDMMYY}", re.compile(r"\bDDMMYY\b(?!YY)", re.I)),
+    ("{DDMM}", re.compile(r"\bDDMM\b(?!YY)", re.I)),
+    ("{DOB}", re.compile(r"date\s+of\s+birth|\bDOB\b", re.I)),
+]
+
+
+def password_rule(text: str) -> str | None:
+    """The password pattern an email describes, in the tokens above, or None if it states none.
+    Parts are put in the order the email writes them; "lowercase"/"capital" picks {n4}/{N4}."""
+    if not text or not _PW_CONTEXT.search(text):
+        return None
+    m = _PW_CONTEXT.search(text)
+    window = text[max(0, m.start() - 250):m.end() + 600]
+    window = "\n".join(s for s in re.split(r"(?<=[.!?|])\s+|\n", window) if not _PW_NOT_RULE.search(s))
+    # Upper or lower case is often said after the example (ICICI: "Enter all letters in lowercase").
+    lower = re.search(r"lower\s*case|small\s+letters", window, re.I)
+    window = re.split(r"for\s+example|e\.g\.|example\s*:", window, maxsplit=1, flags=re.I)[0]  # rule, not sample
+    found: list[tuple[int, str]] = []
+    for token, rx in _PW_PARTS:
+        hit = rx.search(window)
+        if not hit:
+            continue
+        if token == "{DOB}" and any(t.startswith("{DD") for _, t in found):
+            continue  # the format word already says how the date is written
+        if token == "{DDMM}" and any(t in ("{DDMMYYYY}", "{DDMMYY}") for _, t in found):
+            continue
+        found.append((hit.start(), token))
+    if not found or not any(t in ("{DDMMYYYY}", "{DDMMYY}", "{DDMM}", "{DOB}") or t == "{NAME}" for _, t in found):
+        return None
+    name = "{n4}" if lower else "{N4}"
+    rule = "".join(t for _, t in sorted(found)).replace("{NAME}", name).replace("{DOB}", "{DDMMYYYY}")
+    return rule
+
+
+def can_open(rule: str, have_name: bool, have_dob: bool, last4s: list[str]) -> bool:
+    """Whether a PDF locked with this rule can be opened with what we have. {L6} never can:
+    only the last 4 digits of a card are ever known."""
+    if "{L6}" in rule:
+        return False
+    if ("{N4}" in rule or "{n4}" in rule) and not have_name:
+        return False
+    if "{DD" in rule and not have_dob:
+        return False
+    if "{L4}" in rule and not last4s:
+        return False
+    return True
 
 
 def candidates(bank_id: str, name: str | None, dob: date | None, last4s: list[str]) -> list[str]:
@@ -31,12 +95,15 @@ def candidates(bank_id: str, name: str | None, dob: date | None, last4s: list[st
 
 
 def keyed_candidates(bank_id: str, name: str | None, dob: date | None,
-                     last4s: list[str]) -> list[tuple[str, str | None]]:
+                     last4s: list[str], rule: str | None = None) -> list[tuple[str, str | None]]:
     """(password, the card's last 4 it was built with, if any). SBI locks a statement with the
-    date of birth plus that card's last 4, so the password that opens it says whose it is."""
+    date of birth plus that card's last 4, so the password that opens it says whose it is.
+    `rule`: the pattern the statement email states (password_rule); then only that is tried."""
     letters = re.sub(r"[^A-Za-z]", "", (name or "").split()[0] if name else "")[:4]
     out: list[tuple[str, str | None]] = []
-    for pat in PATTERNS.get(bank_id, []) + PATTERNS["*"]:
+    for pat in ([rule] if rule else PATTERNS.get(bank_id, []) + PATTERNS["*"]):
+        if "{L6}" in pat:
+            continue
         if ("{N4}" in pat or "{n4}" in pat) and len(letters) < 4:
             continue
         if "{DD" in pat and not dob:
@@ -216,3 +283,68 @@ HEADING_LINES = 6
 _ADVERT = re.compile(
     r"\b(upgrad\w*|apply|applied|earn\w*|cashback|offer\w*|introduc\w*|eligible|exclusive|avail\w*|switch\w*|"
     r"get\s+(?:a|an|your|the)\b|pre-?approved|limited\s+period|t&c|terms\s+and\s+conditions)", re.IGNORECASE)
+
+
+# ---------------------------------------------------------------- the product shown only as a logo
+# Where each bank prints the card's name on page 1 of its statement, when it isn't in the PDF's
+# text (found on real statements, 2026-11). (left, top, right, bottom) as fractions of the page.
+#   ICICI: the logo across the top ("amazon pay | ICICI Bank", "Sapphiro")
+#   RBL:   a picture just right of the name and address, top left
+#   Yes:   top centre (its emails name the card too)
+# IndusInd and Axis print it as text; AU only in the email; HSBC, SBI and HDFC can't be opened
+# without the card number.
+OCR_REGIONS: dict[str, tuple[float, float, float, float]] = {
+    "icici": (0.0, 0.0, 1.0, 0.13),
+    "rbl": (0.0, 0.0, 0.65, 0.18),
+    "yes": (0.2, 0.0, 0.8, 0.13),
+}
+OCR_DPI = 250
+OCR_MIN_SCORE = 0.85
+
+
+def _ocr_tools() -> tuple[str, str] | None:
+    import shutil
+    a, b = shutil.which("pdftoppm"), shutil.which("tesseract")
+    return (a, b) if a and b else None
+
+
+def product_by_ocr(data: bytes, password: str | None, bank_id: str, catalog: list[str]) -> str | None:
+    """The product the statement's logo shows, read by OCR from the bank's spot on page 1 and
+    accepted only if it matches one of the bank's products closely (OCR_MIN_SCORE) and no other
+    product matches as well. Only a product name is ever taken from OCR: never a number or a
+    name. Rendering and OCR run through pipes; nothing is written to disk. None when this bank
+    has no OCR spot, the tools aren't installed, or nothing matches clearly."""
+    import difflib
+    import subprocess
+    region, tools = OCR_REGIONS.get(bank_id), _ocr_tools()
+    if not region or not tools or not catalog:
+        return None
+    try:
+        box = PdfReader(io.BytesIO(data), password=password or None).pages[0].mediabox
+        w, h = float(box.width) * OCR_DPI / 72, float(box.height) * OCR_DPI / 72
+        left, top, right, bottom = region
+        cmd = [tools[0], "-png", "-r", str(OCR_DPI), "-f", "1", "-l", "1", "-singlefile",
+               "-x", str(int(left * w)), "-y", str(int(top * h)),
+               "-W", str(int((right - left) * w)), "-H", str(int((bottom - top) * h))]
+        cmd += (["-upw", password] if password else []) + ["-"]
+        png = subprocess.run(cmd, input=data, capture_output=True, check=True, timeout=30).stdout
+        read = subprocess.run([tools[1], "stdin", "stdout", "--psm", "11"], input=png, capture_output=True,
+                              check=True, timeout=30).stdout.decode("utf-8", "replace")
+    except Exception:
+        return None
+    words = re.findall(r"[A-Za-z][A-Za-z+&]+", read)
+    read = png = None
+    grams = {"".join(words[i:i + n]).lower() for n in (1, 2, 3) for i in range(len(words) - n + 1)}
+    scored = []
+    for p in catalog:
+        key = re.sub(r"[^a-z]", "", p.lower())
+        scored.append((max((difflib.SequenceMatcher(None, key, g).ratio() for g in grams), default=0.0), p))
+    scored.sort(key=lambda x: (-x[0], len(x[1])))
+    good = [p for s, p in scored if s >= OCR_MIN_SCORE]
+    if not good:
+        return None
+    # Two different products both read clearly (an ad beside the logo): trust neither. One that's
+    # a fuller name of the other ("Emirates Sapphiro" vs "Sapphiro") isn't a clash.
+    best = good[0]
+    rivals = [p for p in good[1:] if best.lower() not in p.lower() and p.lower() not in best.lower()]
+    return None if rivals else best

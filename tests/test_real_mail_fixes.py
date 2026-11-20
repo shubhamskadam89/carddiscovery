@@ -10,6 +10,7 @@ import pytest
 
 from carddiscovery import extract
 from carddiscovery.explain import explain
+from carddiscovery.models import EvidenceType as T
 from carddiscovery.resolve import resolve_full
 from carddiscovery.score import group
 
@@ -121,10 +122,21 @@ def test_app_mail_joins_the_card_the_bank_mail_found():
     assert [c.last4 for c in cards] == ["2846"] and group(cards[0]) == "owned"
 
 
-def test_card_seen_only_in_app_mail_goes_to_review():
-    cards, _, _ = run([cred_bill("5511", days_ago=d) for d in (5, 35, 65)])
+def test_one_app_bill_puts_the_card_in_the_wallet():
+    # CRED sends a bill only for a card linked to the user's own CRED account.
+    cards, _, ev = run([cred_bill("5511")])
     [c] = cards
-    assert c.bank_id == "hdfc" and c.last4 == "5511"
+    assert ev[0].type == T.STATEMENT and c.bank_id == "hdfc" and c.last4 == "5511"
+    assert "app_only" not in c.flags and group(c) == "owned"
+
+
+def test_card_seen_only_in_app_payments_goes_to_review():
+    # "You paid ... on CRED": people pay family members' cards through these apps too.
+    paid = [mail("hdfc", "Payment successful", f"You paid Rs 4,210 to HDFC Bank credit card ending 5511 on CRED.",
+                 days_ago=d, **CRED) for d in (5, 35, 65)]
+    cards, _, ev = run(paid)
+    [c] = cards
+    assert all(e.type == T.PAYMENT for e in ev)
     assert "app_only" in c.flags and group(c) == "review"
     assert any("bill-payment app" in s for s in explain(c, REG).concerns)
 
@@ -381,3 +393,29 @@ def test_one_stray_advert_does_not_block_the_dominant_product():
     cards, _, _ = run([alert] + ace + [stray])
     assert ("6606", "ACE") in {(c.last4, c.product) for c in cards}
     assert not any(c.last4 is None and c.product == "ACE" for c in cards)
+
+
+def test_customer_number_in_an_app_activation_is_not_a_card():
+    # Kotak: "Kotak Mobile Banking app has been activated ... CRN: xxxx3056" made a card ••3056.
+    from carddiscovery import extract
+    text = ("Dear Customer, Kotak Mobile Banking app has been activated after successful mobile number "
+            "verification. Please verify below details: CRN: xxxx3056 Device Name: iPhone 12")
+    assert extract.last4s(text) == []
+    assert extract.last4s("Customer ID XXXX1234; your credit card XX5678") == ["5678"]
+
+
+@pytest.mark.parametrize("fname,last4,product", [
+    ("5241XXXXXXXX1014_332796_Retail_Sapphiro_NORM.pdf", "1014", "Sapphiro"),  # generic subject, logo-only PDF
+    ("4315XXXXXXXX7008_793649_Retail_Amazon_NORM.pdf", "7008", "Amazon Pay"),   # code is the first word
+    ("4315XXXXXXXX2222_1_Retail_Zzzunknown_NORM.pdf", "2222", None),            # unknown code: no guess
+])
+def test_icici_statement_file_name_gives_the_product(fname, last4, product):
+    from datetime import datetime, timezone
+    from carddiscovery.classify import analyze
+    from carddiscovery.models import MessageMeta
+    m = MessageMeta("i1", datetime.now(timezone.utc), "ICICI Bank <credit_cards@icici.bank.in>",
+                    "ICICI Bank Credit Card Statement for the period October 16 2026 to November 15 2026",
+                    "Credit Card Statement", auth_results="mx.google.com; dkim=pass header.i=@icici.bank.in",
+                    body="Credit Card Statement. Payment due by November 30, 2026", attachment_names=(fname,))
+    ev = analyze(m, REG, [], [])
+    assert ev.type == T.STATEMENT and ev.last4s == [last4] and ev.product == product

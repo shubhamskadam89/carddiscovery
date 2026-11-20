@@ -92,11 +92,18 @@ _EXAMPLE_BEFORE = re.compile(r"\b(?:for\s+example|example|e\.g\.|eg:|for\s+insta
 _PHONE_BEFORE = re.compile(r"\b(?:mobile|phone|contact|whatsapp)(?:\s+(?:no\.?|number))?\s*(?:is)?\s*[:\-]?\s*['\"]?\s*$",
                            re.IGNORECASE)
 _MASKED_DATE = re.compile(r"^[xX*]{2}[-/.][xX*]{2}[-/.]\d{4}$")
+# Customer and login identifiers banks mask like card numbers: Kotak's "CRN: xxxx3056" in a
+# mobile-app activation email made a card out of the customer number.
+_ID_BEFORE = re.compile(
+    r"\b(?:crn|cif|customer\s+(?:id|no\.?|number|relationship\s+(?:no\.?|number))|cust(?:omer)?\.?\s*id|"
+    r"relationship\s+(?:no\.?|number)|user\s*(?:id|name)|login\s+id|client\s+id|"
+    r"device\s+(?:id|name)|ref(?:erence)?\.?\s*(?:no\.?|number|id)?|order\s+(?:id|no\.?))\s*[:\-#]?\s*$",
+    re.IGNORECASE)
 
 
 def _not_a_card(text: str, m: re.Match) -> bool:
     before = text[max(0, m.start() - 40):m.start()]
-    return bool(_ACCOUNT_BEFORE.search(before) or _PHONE_BEFORE.search(before)
+    return bool(_ACCOUNT_BEFORE.search(before) or _PHONE_BEFORE.search(before) or _ID_BEFORE.search(before)
                 or _MASKED_DATE.match(m.group(0).strip(" '\""))
                 or _EXAMPLE_BEFORE.search(text[max(0, m.start() - 160):m.start()]))
 
@@ -216,3 +223,17 @@ def product_raw(text: str) -> str | None:
     """Best-effort product phrase before 'Credit Card', for unknown products."""
     m = _PRODUCT_RAW.search(text)
     return " ".join(m.group(1).split()) if m else None
+
+
+# "your HSBC Visa Platinum Credit Card ending with 9719": the card the user holds, named
+# with its number in one phrase. Offers often advertise other cards, so in an offer only
+# this exact form says which product a number is.
+_HELD = re.compile(
+    r"\byour\s+([^.\n:;!?]{1,60}?)\s+credit\s+card\s+(?:no\.?\s+|number\s+)?ending\s+(?:with\s+|in\s+)?"
+    r"[xX*•]*\s*(\d{4})(?!\d)", re.IGNORECASE)
+
+
+def held_phrases(text: str) -> list[tuple[str, str]]:
+    """(words before "credit card", last4) for each "your ... credit card ending with NNNN"."""
+    flat = re.sub(r"\s+", " ", text or "")
+    return [(m.group(1), m.group(2)) for m in _HELD.finditer(flat)]

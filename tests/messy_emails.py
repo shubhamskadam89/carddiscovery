@@ -66,8 +66,9 @@ Unsubscribe | Privacy Policy | Contact us | Download our app | Follow us on soci
         subject="Exclusive for you: 10X reward points on your Regalia Gold Credit Card XX2468",
         body="This festive season, earn 10X reward points on your HDFC Bank Regalia Gold Credit Card ending 2468. "
              "Offer valid till 31 Dec 2026. T&C apply.",
-        tests="Marketing that names a card the user holds: must not create a new card",
-        expect=None,
+        tests="Marketing that names a card the user holds, with its number: no new card, but it names "
+              "••2468 (from M1, which never says the product) as the Regalia Gold",
+        expect={("hdfc", "2468"): ("owned", "Regalia Gold")},
     ),
     dict(
         id="M8",

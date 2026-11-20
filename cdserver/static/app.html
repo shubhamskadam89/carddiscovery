@@ -130,6 +130,43 @@ label.check input { margin-top: 3px; width: 18px; height: 18px; }
 .rowitem .k { color: var(--muted); font-size: 14px; } .rowitem .v { font-weight: 600; font-size: 14px; text-align: right; }
 .state-ico { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; font-size: 30px;
   margin: 60px auto 8px; background: var(--soft); }
+
+/* ---- developer panel: beside the phone on wide screens, a toggle on narrow ones ---- */
+.dev { display: none; }
+.dev-toggle { position: fixed; right: 12px; bottom: 12px; z-index: 20; border: 0; border-radius: 18px;
+  padding: 8px 14px; background: var(--accent); color: var(--accent-ink); font: 600 13px/1 -apple-system, sans-serif;
+  cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+body.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; overflow-y: auto; background: var(--bg);
+  padding: 16px 18px 60px; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+@media (min-width: 720px) {
+  .dev-toggle { display: none; }
+  body { padding-right: 330px; }
+  .dev { display: block; position: fixed; top: 0; right: 0; bottom: 0; width: 330px; overflow-y: auto;
+    background: var(--bg); border-left: 1px solid var(--line); padding: 16px 18px 40px;
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+}
+.dev h3 { font: 600 11px/1 -apple-system, sans-serif; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 18px 0 8px; }
+.dev h3:first-child { margin-top: 0; }
+.dev .kv { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.dev .kv span:first-child { color: var(--muted); }
+.dev .kv span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.dev .bar { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
+.dev .bar i { display: block; height: 100%; background: var(--accent); }
+.dev .steps { display: flex; gap: 6px; margin-bottom: 8px; }
+.dev .steps b { flex: 1; text-align: center; padding: 4px 0; border-radius: 6px; background: var(--soft);
+  font-weight: 500; color: var(--muted); }
+.dev .steps b.on { background: var(--chip); color: var(--chip-ink); font-weight: 700; }
+.dev .steps b.ok { color: var(--ok); }
+.dev .pill { display: inline-block; padding: 1px 7px; border-radius: 9px; background: var(--soft); }
+.dev .pill.running { background: var(--chip); color: var(--chip-ink); }
+.dev .pill.done { background: var(--ok-bg); color: var(--ok); }
+.dev .pill.failed { background: var(--bad-bg); color: var(--bad); }
+.dev .pill.queued { background: var(--warn-bg); color: var(--warn); }
+.dev .last { color: var(--muted); margin-top: 6px; word-break: break-word; }
+.dev .dev-go { width: 100%; margin: 0 0 14px; padding: 10px; border: 0; border-radius: 10px; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); font: 600 14px/1 -apple-system, sans-serif; }
+.dev .dev-go:disabled { opacity: .55; cursor: default; }
 </style>
 </head>
 <body>
@@ -245,6 +282,8 @@ label.check input { margin-top: 3px; width: 18px; height: 18px; }
     <div class="home-ind"></div>
   </div>
 </div>
+<button class="dev-toggle" id="dev-toggle" type="button">Dev stats</button>
+<aside class="dev" id="dev" aria-label="Developer stats"><h3>Developer stats</h3><div class="muted">Loading…</div></aside>
 <script>
 "use strict";
 const TOKEN = "__TOKEN__";
@@ -274,7 +313,8 @@ tick(); setInterval(tick, 15000);
 function fitDevice() {
   const d = document.querySelector(".device");
   if (innerWidth <= 480) { d.style.zoom = ""; return; }
-  d.style.zoom = Math.min(1, (innerHeight - 32) / 868, (innerWidth - 32) / 414).toFixed(3);
+  const side = innerWidth >= 720 ? 330 : 0;  // the developer panel
+  d.style.zoom = Math.min(1, (innerHeight - 32) / 868, (innerWidth - side - 32) / 414).toFixed(3);
 }
 fitDevice(); addEventListener("resize", fitDevice);
 
@@ -399,6 +439,96 @@ $("set-delete").addEventListener("click", async () => {
   if (["denied", "noscope", "expired"].includes(hash)) return show("s-" + hash);
   show("s-home");
 })();
+
+// ---- developer panel: live scan numbers, refreshed every 2 s (counts only, no email text)
+const n = (x) => (x == null ? "–" : Number(x).toLocaleString());
+const fmtS = (s) => s == null ? "–" : s < 90 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+const fmtMonth = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+function kv(box, k, v) { const r = el("div", "kv"); r.append(el("span", null, k), el("span", null, String(v))); box.append(r); }
+function h(box, t) { box.append(el("h3", null, t)); }
+async function devTick() {
+  const box = $("dev"); if (getComputedStyle(box).display === "none") return;
+  let d; try { d = await api("/api/dev/live"); } catch (e) { return; }
+  box.textContent = "";
+  const busy = d.current && ["running", "queued"].includes(d.current.status);
+  const go = el("button", "dev-go", busy ? "Scan running…" : "Start fresh scan");
+  go.disabled = busy;
+  go.addEventListener("click", async () => {
+    if (!confirm("Clear this account's found cards and scan Gmail again from the start?")) return;
+    go.disabled = true; go.textContent = "Starting…";
+    try { await api("/api/dev/fresh_scan", {}); renderHome(); } catch (e) { alert(e.message); }
+    devTick();
+  });
+  box.append(go);
+  h(box, "Scan"); kv(box, "Mode", d.scan_mode);
+  const c = d.current;
+  if (!c) { kv(box, "Job", "none yet"); }
+  else {
+    const r = el("div", "kv"); const p = el("span", "pill " + c.status, c.status);
+    r.append(el("span", null, `Job #${c.id} ${c.kind}`), p); box.append(r);
+    kv(box, "Running for", fmtS(c.secs));
+    if (c.run_after) kv(box, "Resumes at", new Date(c.run_after).toLocaleTimeString());
+    const dv = c.dev || {};
+    if (dv.steps) {
+      const st = el("div", "steps"); const idx = dv.steps.findIndex(x => x[0] === dv.step);
+      dv.steps.forEach(([name], i) => st.append(el("b", i === idx ? "on" : (i < idx || dv.step === "done") ? "ok" : "", name)));
+      box.append(st);
+    }
+    if (dv.window && dv.step !== "done") {
+      kv(box, "Checking", `${fmtMonth(dv.window[0])} → ${fmtMonth(dv.window[1])}`);
+      kv(box, "Window", `${dv.window_index + 1} of ${dv.window_total}`);
+      const b = el("div", "bar"), i = el("i"); i.style.width = (100 * dv.window_index / dv.window_total) + "%"; b.append(i); box.append(b);
+    }
+    if (dv.label && dv.step !== "done") kv(box, "Now", dv.label);
+    if (dv.step === "half cards" || (dv.half_cards && dv.half_cards.total)) {
+      const hc = dv.half_cards || {};
+      kv(box, "Half-known cards", `${n(hc.completed)} completed of ${n(hc.total)}`);
+      if (dv.step === "half cards") kv(box, "Card", `${dv.window_index} of ${dv.window_total}`);
+    }
+    if (dv.pdfs_consent != null) kv(box, "PDF consent", dv.pdfs_consent ? "yes" : "no (emails only)");
+    if (c.last && c.last.length) box.append(el("div", "last", c.last[0]));
+    if (c.error) box.append(el("div", "last", "Error: " + c.error));
+    const m = c.meter || {};
+    h(box, "Quota (this job)");
+    kv(box, "Units", `${n(m.units ?? c.units)} / ${n(m.budget)}`);
+    if (m.budget) { const b = el("div", "bar"), i = el("i"); i.style.width = Math.min(100, 100 * m.units / m.budget) + "%"; b.append(i); box.append(b); }
+    const calls = m.calls || {}, by = m.units_by_kind || {};
+    for (const k of ["search", "metadata", "full", "attachment", "profile"])
+      if (calls[k] || by[k]) kv(box, k, `${n(calls[k])} calls · ${n(by[k])} u`);
+    kv(box, "Units / min", c.secs > 0 ? n(Math.round((m.units ?? c.units) / (c.secs / 60))) : "–");
+    kv(box, "Waited for quota", fmtS(m.waited_s));
+    kv(box, "Throttled by Google", `${n(m.throttled)} times · ${fmtS(m.backoff_s)}`);
+    const s = c.stats || {};
+    if (Object.keys(s).length) {
+      h(box, "Emails (this job)");
+      kv(box, "Searches", n(s.searches)); kv(box, "Headers read", n(s.header_reads)); kv(box, "Read in full", n(s.full_reads));
+    }
+  }
+  h(box, "Statements & PDFs");
+  const po = d.pdfs.outcomes, labels = { read: "PDF read", password: "PDF locked (password)", no_number: "PDF, no card number",
+    unreadable: "PDF unreadable", no_pdf: "no PDF attached", email: "email was enough", checked: "email only (no consent)" };
+  kv(box, "PDFs downloaded", n(d.pdfs.attachments_downloaded));
+  const total = Object.values(po).reduce((a, b) => a + b, 0); kv(box, "Statements checked", n(total));
+  for (const [k, lbl] of Object.entries(labels)) if (po[k]) kv(box, lbl, n(po[k]));
+  const dvr = c && c.dev && c.dev.statement_reads;
+  if (dvr) kv(box, "This job", Object.entries(dvr).map(([k, v]) => `${k} ${v}`).join(", "));
+  h(box, "Cards");
+  for (const [g, v] of Object.entries(d.cards.by_group)) kv(box, g, n(v));
+  for (const b of d.cards.owned_by_bank) kv(box, "  " + b.bank_id, n(b.n));
+  h(box, "Evidence stored");
+  const evTotal = Object.values(d.evidence.by_type).reduce((a, b) => a + b, 0);
+  kv(box, "Emails kept", n(evTotal));
+  if (d.evidence.oldest) kv(box, "Dates", `${fmtMonth(d.evidence.oldest)} → ${fmtMonth(d.evidence.newest)}`);
+  for (const [t, v] of Object.entries(d.evidence.by_type).slice(0, 8)) kv(box, "  " + t, n(v));
+  h(box, "Quota today");
+  kv(box, "This account", n(d.quota.account_today)); kv(box, "All accounts", n(d.quota.all_accounts_today));
+  h(box, "Recent jobs");
+  for (const j of d.jobs) kv(box, `#${j.id} ${j.kind}`, `${j.status} · ${n(j.units)} u · ${fmtS(j.secs)}`);
+}
+$("dev-toggle").addEventListener("click", () => {
+  const on = document.body.classList.toggle("dev-open");
+  $("dev-toggle").textContent = on ? "Back to app" : "Dev stats"; if (on) devTick(); });
+setInterval(devTick, 2000); setTimeout(devTick, 300);
 </script>
 </body>
 </html>

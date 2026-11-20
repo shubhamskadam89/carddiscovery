@@ -80,6 +80,10 @@ def _match_rules(text: str) -> T | None:
     return None
 
 
+_APPROVED = re.compile(r"\bapplication\b[^.!]{0,120}?\b(?:has\s+been|is|was)\s+approved\b", re.IGNORECASE)
+_REJECTED = re.compile(r"\b(?:not|un)\s*(?:been\s+)?approved\b|regret|unable\s+to\s+approve", re.IGNORECASE)
+
+
 def classify(msg: MessageMeta, bank_id: str | None, has_last4: bool) -> T:
     subject = msg.subject or ""
     head = f"{subject}\n{msg.snippet or ''}"
@@ -98,6 +102,12 @@ def classify(msg: MessageMeta, bank_id: str | None, has_last4: bool) -> T:
     if (bank_id not in CREDIT_ONLY_BANKS and NON_CREDIT.search(head)
             and not CREDIT_WORDS.search(_without_offers(full))):
         return T.NOT_CREDIT_CARD
+
+    # "Your application for the American Express® Platinum Travel Credit Card has been approved"
+    # under the subject "Important update on the status of your application": an approval, not
+    # the application's progress, nor the "privacy statement" link in its footer.
+    if _APPROVED.search(full) and not _REJECTED.search(full):
+        return T.APPROVAL
 
     subject_offer = bool(OFFER.search(subject))
     if not subject_offer:
@@ -167,6 +177,11 @@ def addressed_to_user(msg: MessageMeta, user_addresses: list[str]) -> bool:
 
 # ---------------------------------------------------------------- analysis
 
+# A bill an app (CRED, ...) sends for a card: generated, due, or a new statement.
+_APP_BILL = re.compile(r"\bbill\s+(?:is\s+|has\s+been\s+)?(?:generated|due)\b|\bnew\s+statement\b|\bbill\s+of\b",
+                       re.IGNORECASE)
+
+
 def analyze(
     msg: MessageMeta,
     registry: Registry,
@@ -211,10 +226,25 @@ def analyze(
     if app and not l4:
         bank_id = None
     etype = classify(msg, bank_id, bool(l4))
+    if app and etype == T.PAYMENT and _APP_BILL.search(text):
+        # "Your HDFC Bank credit card bill is due": an app sends bills only for cards linked to
+        # the user's own account there, so it's a statement. "You paid ... on CRED" stays a
+        # payment: people pay other people's cards through these apps too.
+        etype = T.STATEMENT
     # Products come from the email minus boilerplate and ad banners, so a statement
     # that also advertises another card still names the card it is about.
     products, best = _products(registry, bank_id, msg.subject or "", text, l4)
     products, best, loose = _refine_variant(registry, bank_id, etype, text, products, best)
+    named_file = _product_from_filename(registry, bank_id, msg.attachment_names)
+    if named_file:  # the statement's own file names its card; ads in the email don't outrank it
+        best, products = named_file, [named_file] + [p for p in products if p != named_file]
+    held = False
+    if etype == T.OFFER_EXISTING_CARD and bank_id and len(l4) == 1:
+        named = {p for words, n in extract.held_phrases(text) if n == l4[0]
+                 for p in registry.products_in(bank_id, words + " credit card")}
+        if len(named) == 1:
+            best, held = named.pop(), True
+            products = [best]
     return Evidence(
         message_id=msg.message_id,
         date=msg.date,
@@ -236,7 +266,33 @@ def analyze(
         used_body=msg.body is not None,
         test=test,
         rules_version=active_version(),
+        held=held,
     )
+
+
+# ICICI names each statement PDF after the card, with a product code where the PDF itself
+# shows the product only as an image (the logo): "4315XXXXXXXX7008_793649_Retail_Amazon_NORM.pdf",
+# "5241XXXXXXXX1014_332796_Retail_Sapphiro_....pdf".
+_FILE_PRODUCT = re.compile(r"(?<![A-Za-z0-9])\d{4}[Xx]{6,}\d{4}_\d+_(?:Retail|Corporate|Business)_([A-Za-z]+)")
+
+
+def _product_from_filename(registry: Registry, bank_id: str | None, names) -> str | None:
+    """The product a statement file's name gives: the code itself ("Sapphiro"), or else the
+    one product starting with it ("Amazon" -> "Amazon Pay")."""
+    bank = registry.banks.get(bank_id or "")
+    if not bank:
+        return None
+    catalog = sorted({p for _, p in bank.product_patterns}, key=len)
+    for name in names or ():
+        m = _FILE_PRODUCT.search(name)
+        if not m:
+            continue
+        code = m.group(1).lower()
+        exact = [p for p in catalog if p.lower() == code]
+        starts = [p for p in catalog if p.lower().split()[0] == code]
+        if exact or len(starts) >= 1:
+            return (exact or starts)[0]  # shortest first: "Emeralde" before "Emeralde Private Metal"
+    return None
 
 
 def _products(registry: Registry, bank_id: str | None, subject: str, text: str,

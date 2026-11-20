@@ -416,6 +416,8 @@ class _Reader:
         self.addresses = gmail.user_addresses()
         self.known = store.known()
         self.tokens: dict[tuple[str, str], set[str]] = store.number_tokens()
+        # Subjects read so far (lower case, digit-free ones only), for skipping repeats.
+        self.subjects: dict[str, int] = {}
 
     def _learn(self, m, ev) -> None:
         if ev.bank_id and ev.last4s:
@@ -426,6 +428,9 @@ class _Reader:
         batch = []
         for m, ev in metas_evs:
             self._learn(m, ev)
+            subj = " ".join((m.subject or "").lower().split())
+            if ev.bank_id and subj and not re.search(r"[\d\"]", subj):
+                self.subjects[subj] = self.subjects.get(subj, 0) + 1
             m.body = None  # email text never outlives this step
             batch.append(ev)
             self.known[ev.message_id] = ev
@@ -595,6 +600,72 @@ def subject_scan(gmail, registry: Registry, store: EvidenceStore, today: date, y
     return st
 
 
+# ---------------------------------------------------------------- monthly (CD_SCAN_MODE=monthly)
+
+# Subjects with the word "card" (Gmail matches whole words): "credit card" alone missed SBI's
+# "Transaction Alert from BPCL Octane Card", CRED's "statement for your IDFC First Bank card
+# XXXX-7846" and "Your SBI Card Account Deactivation". Debit and savings mail stay out
+# (NOISE_SUBJECT), and so do the Promotions tab and every card already found by its number.
+MONTHLY_SUBJECTS = ("card",)
+# A subject read this many times (an alert template: "Transaction Alert from BPCL Octane Card")
+# is left out of later months' searches, which is free, instead of read every month at 20
+# units each. Every RECHECK_EVERY months it's searched again, so a new card on the same
+# template (a replacement, an add-on) still shows up.
+REPEAT_SUBJECT_LIMIT = 4
+RECHECK_EVERY = 6
+MAX_SUBJECT_EXCLUSIONS = 15
+# The lifecycle pass after the main scan: dormant and closed cards often send only these.
+LIFECYCLE_SUBJECTS = FAMILIES["onboarding"] + FAMILIES["lifecycle"]
+MONTH_DAYS = 30
+
+
+def month_windows(today: date, years: int) -> list[tuple[date, date]]:
+    """One-month windows (30 days), newest first, back `years` years. Ends are exclusive."""
+    end = today + timedelta(days=1)
+    out = []
+    for k in range(-(-365 * years // MONTH_DAYS)):
+        before = end if k == 0 else today - timedelta(days=MONTH_DAYS * k)
+        out.append((today - timedelta(days=MONTH_DAYS * (k + 1)), before))
+    return out
+
+
+def windowed_subject_scan(gmail, registry: Registry, store: EvidenceStore,
+                          windows: list[tuple[date, date]], subjects: tuple[str, ...], *, names: list[str],
+                          on_batch: Callable[[ScanStats], None] = lambda s: None,
+                          on_window: Callable[[date, date], None] = lambda a, b: None,
+                          family: str = "monthly") -> ScanStats:
+    """Window by window, newest first: search every bank and app sender for these subjects,
+    outside the Promotions tab, with every card already found excluded by its number, and read
+    subjects and previews only (20 units each, no full reads). After each window `on_window`
+    runs, so the cards found so far can be shown and acted on."""
+    t0 = time.monotonic()
+    st = ScanStats()
+    r = _Reader(gmail, registry, store, names, st, on_batch, t0)
+    for w, (after, before) in enumerate(windows):
+        for _ in range(SUBJECT_ROUNDS):
+            cards = _known_cards(r.known.values())
+            excl = tuple(f"-{t}" for b, l4 in cards for t in number_terms(b, l4, r.tokens.get((b, l4), ())))
+            repeats = () if w % RECHECK_EVERY == RECHECK_EVERY - 1 else tuple(
+                s for s, n in sorted(r.subjects.items(), key=lambda x: -x[1])
+                if n >= REPEAT_SUBJECT_LIMIT)[:MAX_SUBJECT_EXCLUSIONS]
+            st.per_family["subjects_skipped"] = len(repeats)
+            plan = [Query(family=family, senders=g, subject_any=subjects, exclude_subject=NOISE_SUBJECT + repeats,
+                          after=after, before=before, extra=NO_PROMOS + excl) for g in _sender_groups(registry)]
+            results = _search_all(gmail, st, plan)
+            for fam, ids in results:
+                st.per_family[fam] = st.per_family.get(fam, 0) + len(ids)
+            todo = list(dict.fromkeys(i for _, ids in results for i in ids if i not in r.known))
+            st.listed += len(todo)
+            if not todo:
+                break
+            r.read(todo[:READS_PER_ROUND], full=False)
+            if len(todo) <= READS_PER_ROUND:
+                break
+        on_window(after, before)
+    st.seconds = round(time.monotonic() - t0, 2)
+    return st
+
+
 def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date, years: int, *,
                     names: list[str], on_batch: Callable[[ScanStats], None] = lambda s: None,
                     on_window: Callable[[date, int], None] = lambda d, n: None) -> ScanStats:
@@ -647,5 +718,86 @@ def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date
         store.save_card_index({c: {**v, "number_tokens": sorted(r.tokens.get(c, ()))} for c, v in index.items()})
         on_window(after, len(probed))
     st.per_family.update(windows=n_windows, rounds=n_rounds, cards_probed=len(probed))
+    st.seconds = round(time.monotonic() - t0, 2)
+    return st
+
+
+# ---------------------------------------------------------------- half-known cards
+# Cards known by only one half: a number with no name (alerts, payments: "card ending 9719")
+# or a name with no number (statements: "HSBC LIVE+ CREDIT CARD", PDF locked). The other
+# half is often only in mail the subject scan skips, offers in the Promotions tab included:
+# "spends on your HSBC Visa Platinum Credit Card ending with 9719". One search per card, all
+# tabs, then whole emails, newest first, until one names both; at most HALF_READS per card.
+HALF_READS = int(os.environ.get("CD_HALF_READS", "3"))
+HALF_UNTRUSTED = (T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD)
+
+
+def half_cards(evs) -> list[tuple[str, str, str]]:
+    """(bank, "name" | "number", last4 or product): the half each such card is missing."""
+    from carddiscovery.resolve import resolve_full
+    out = []
+    for c in resolve_full(list(evs)).cards:
+        if c.last4 and not c.product_history:
+            out.append((c.bank_id, "name", c.last4))
+        elif not c.last4 and c.product:
+            out.append((c.bank_id, "number", c.product))
+    return out
+
+
+def _same_line(a: str, b: str) -> bool:
+    from carddiscovery.registry import _extends
+    return _extends(a, b) or _extends(b, a)
+
+
+def _completes(ev: Evidence, want: str, value: str) -> bool:
+    if ev.type in HALF_UNTRUSTED or (ev.type == T.OFFER_EXISTING_CARD and not ev.held):
+        return False
+    if want == "name":
+        return value in ev.last4s and bool(ev.product)
+    return bool(ev.last4s) and bool(ev.product) and (ev.product == value or _same_line(ev.product, value))
+
+
+def half_card_lookup(gmail, registry: Registry, store: EvidenceStore, start: date, *, names: list[str],
+                     on_batch: Callable[[ScanStats], None] = lambda s: None,
+                     on_card: Callable[..., None] = lambda *a: None) -> ScanStats:
+    t0 = time.monotonic()
+    st = ScanStats()
+    todo = half_cards(store.known().values())
+    if not todo:
+        return st
+    r = _Reader(gmail, registry, store, names, st, on_batch, t0)
+    for i, (bank_id, want, value) in enumerate(todo):
+        bank = registry.banks.get(bank_id)
+        # What one find settles can settle others too: once ••9719 is the Visa Platinum, the
+        # bank's one other number and one other name ("Live+", ••3408) pair up by themselves.
+        # Re-resolving costs no quota; a search and reads do.
+        found = (bank_id, want, value) not in half_cards(r.known.values())
+        if not found and bank and bank.domains:
+            if want == "name":  # the number is known: mail naming it, in any tab
+                q = Query(family="half_card", senders=tuple(bank.domains), after=start,
+                          text_any=tuple(number_terms(bank_id, value, r.tokens.get((bank_id, value), ()))),
+                          extra=('"credit card"',))
+            else:  # the name is known: mail naming it next to a card ending
+                # Its words, not the phrase: SBI writes "IRCTC SBI Platinum Card" for "IRCTC Platinum".
+                # No "ending" required: HDFC statements show the number only as the PDF's name
+                # ("4893XXXXXXXXXX90_...pdf"), which a full read brings in.
+                words = tuple(w for w in re.findall(r"[A-Za-z0-9]+", value) if len(w) > 1) or (value,)
+                q = Query(family="half_card", senders=tuple(bank.domains), after=start, extra=words + ("card",))
+            ids = [m for _, got in _search_all(gmail, st, [q]) for m in got]
+            # Not yet read first (offers, mostly), then mail read by its header only.
+            fresh = [m for m in ids if m not in r.known]
+            skimmed = [m for m in ids if m in r.known and not r.known[m].used_body]
+            for mid in (fresh + skimmed)[:HALF_READS]:
+                if r.g.meter.affordable("full") < 1:
+                    break
+                r.read_full([mid])  # 60 units: the whole email
+                if mid in r.known and _completes(r.known[mid], want, value):
+                    found = True
+                    if want == "name":
+                        break
+                    # A name can stand for two numbers (a card and its add-on: SBI sends
+                    # "Transaction Alert from BPCL Octane Card" for ••8022 and ••8030 alike),
+                    # so a name lookup reads all its sample.
+        on_card(i, len(todo), bank_id, want, value, found)
     st.seconds = round(time.monotonic() - t0, 2)
     return st

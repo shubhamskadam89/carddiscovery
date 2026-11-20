@@ -9,8 +9,17 @@ from carddiscovery.registry import Registry
 from cdserver import engine, jobs, pdf
 from cdserver.sim.pdfgen import make_pdf
 
+import pytest
+
 NOW = datetime.now(timezone.utc)
 REG = Registry.load()
+
+
+@pytest.fixture(autouse=True)
+def unlocked_test_pdfs(monkeypatch):
+    # The PDFs built here have no password. Real HSBC statements need 6 digits of the card
+    # number, so the step wouldn't download them at all (see test_a_pdf_we_cant_open_is_not_downloaded).
+    monkeypatch.setitem(pdf.PATTERNS, "hsbc", [])
 
 LIVE = ["HSBC Live+ Credit Card Statement", "Name: NIKHIL JAIN", "Card Number: XXXX XXXX XXXX 3408",
         "Statement Date: 05 Nov 2026", "Total Amount Due: Rs. 1,200.00"]
@@ -320,11 +329,17 @@ def test_without_pdf_consent_the_email_still_settles_and_no_pdf_is_opened(c, acc
     outcomes = {r["message_id"]: r["outcome"] for r in
                 c.execute("SELECT message_id, outcome FROM statement_pdf_reads WHERE account_id = %s", (a,))}
     assert outcomes == {"d1": "email", "x1": "checked"}
-    # Once the user consents, the checked email's PDF is tried.
+    # Once the user consents (and gives the name HDFC's password uses), the checked email's PDF is tried.
     j2 = jobs.Job(c, {"id": 2, "account_id": a, "kind": "pdf_enrich", "payload": {}}, REG, None, "w")
     j2._gmail = PdfGmail(j2.meter, {"x1": make_pdf(LIVE)}, mails)
-    jobs.read_statement_gaps(j2, None, None, pdfs=True)
+    jobs.read_statement_gaps(j2, "Nikhil Jain", None, pdfs=True)
     assert j2.gmail.fetched == ["x1"]
+    # Without the name, a PDF locked with it isn't even downloaded.
+    j3 = jobs.Job(c, {"id": 3, "account_id": a, "kind": "pdf_enrich", "payload": {}}, REG, None, "w")
+    j3._gmail = PdfGmail(j3.meter, {"x1": make_pdf(LIVE)}, mails)
+    c.execute("DELETE FROM statement_pdf_reads WHERE account_id = %s", (a,))
+    jobs.read_statement_gaps(j3, None, None, pdfs=True)
+    assert j3.gmail.fetched == []
 
 
 # ---------------------------------------------------------------- subjects-first scan (CD_SCAN_MODE=subjects)
@@ -360,3 +375,18 @@ def test_subject_scan_reads_subjects_only_and_runs_the_pdf_step_after_the_first_
     assert "x3" not in known                          # not about a credit card: never read
     assert fake.meter.calls.get("full", 0) == 0       # subjects and previews only
     assert calls == ["pdf step"]                      # once, right after the first year
+
+
+def test_a_pdf_we_cant_open_is_not_downloaded(c, account, monkeypatch):
+    # The statement email says how it's locked: date of birth + the last 6 digits of the card.
+    # Only the last 4 are ever known, so the PDF isn't downloaded (20 units saved per statement).
+    from carddiscovery.models import MessageMeta
+    monkeypatch.setitem(pdf.PATTERNS, "hsbc", ["{DDMMYY}{L6}"])
+    rule = ("Your password is a combination of your date of birth (in DDMMYY format) followed by the last 6 digits "
+            "of the primary credit card number.")
+    a, j = setup(c, account, {"s1": make_pdf(LIVE), "s3": make_pdf(PLATINUM)})
+    j._gmail.mails = {m: MessageMeta(m, NOW, "HSBC <creditcardstatement@mail.hsbc.co.in>",
+                                     "Your HSBC Credit Card statement", rule, body=rule) for m in ("s1", "s3")}
+    assert jobs.read_statement_gaps(j, "Nikhil Jain", NOW.date()) == 0
+    assert j.gmail.fetched == []                                   # nothing downloaded
+    assert j.dev.get("pdfs_not_downloaded", {}).get("hsbc") == 2

@@ -31,12 +31,15 @@ def main() -> None:
     sim.add_argument("--total", type=int, default=10_000)
     sim.add_argument("--seed", type=int, default=7)
     sim.add_argument("--years", type=int, default=3, choices=[1, 3, 5])
+    sim.add_argument("--mix", default="synthetic", choices=["synthetic", "real"],
+                     help="real: one year, ~20 cards, shaped like real bank mail (sim/realmix.py)")
     au = sub.add_parser("audit", help="development only: how a consenting inbox's bank mail looks to the engine")
     au.add_argument("--account", type=int, required=True)
     au.add_argument("--every", type=int, default=4, help="read every Nth email from known senders")
     au.add_argument("--rate", type=int, default=2000, help="Gmail units per minute (Google allows 6,000)")
     ev = sub.add_parser("evaluate", help="compare a user's cards with the simulated inbox's answer file")
     ev.add_argument("--mailbox", default="shubhamtester183@gmail.com")
+    ev.add_argument("--mix", default="synthetic", choices=["synthetic", "real"])
     args = p.parse_args()
 
     from . import config, db
@@ -97,7 +100,8 @@ def main() -> None:
             row = c.execute("SELECT account_id, years FROM gmail_connections WHERE mailbox = %s", (args.mailbox,)).fetchone()
             if not row:
                 sys.exit(f"No connected account for {args.mailbox}. Connect it in the app first.")
-            print_report(evaluate(c, row["account_id"], load_truth(config.HOME / "sim" / "truth.json"), row["years"],
+            name = "truth_real.json" if args.mix == "real" else "truth.json"
+            print_report(evaluate(c, row["account_id"], load_truth(config.HOME / "sim" / name), row["years"],
                                   registry()))
     elif args.cmd == "jobs":
         with db.pool().connection() as c:
@@ -114,9 +118,28 @@ def main() -> None:
 def _sim(args) -> None:
     from . import config, db
     from .sim import generate as gen
-    truth_file = config.HOME / "sim" / "truth.json"
-    mails, truth = gen.build(args.to, args.total, args.seed)
+    if args.mix == "real":
+        from .sim import realmix
+        truth_file = config.HOME / "sim" / "truth_real.json"
+        mails, truth = realmix.build(args.to)
+    else:
+        truth_file = config.HOME / "sim" / "truth.json"
+        mails, truth = gen.build(args.to, args.total, args.seed)
     gen.write_truth(truth, truth_file)
+    if args.action == "dryrun" and args.mix == "real":
+        from .sim.dryrun import run_monthly
+        from .sim.evaluate import evaluate, print_report
+        from .worker import registry
+        reg = registry()
+        db.migrate()
+        with db.pool().connection() as c:
+            c.execute("DELETE FROM accounts WHERE external_id = 'sim-dryrun-real'")
+            acc = c.execute("INSERT INTO accounts (external_id) VALUES ('sim-dryrun-real') RETURNING id").fetchone()["id"]
+            for s in run_monthly(c, acc, mails, args.to, reg, realmix.TODAY, [gen.PERSONA["name"]]):
+                print(f"  {s['kind']:<12} units {s['units']:>6}  searches {s.get('searches', '-')}  headers "
+                      f"{s.get('header_reads', '-')}  full {s.get('full_reads', '-')}  by kind {s['units_by_kind']}")
+            print_report(evaluate(c, acc, truth, 1, reg))
+        return
     if args.action == "generate":
         print(f"{len(mails)} emails for {args.to}, {mails[0].when:%Y-%m-%d} to {mails[-1].when:%Y-%m-%d}; "
               f"answer file: {truth_file}")

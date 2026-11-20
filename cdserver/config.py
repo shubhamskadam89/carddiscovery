@@ -34,7 +34,9 @@ PRIORITY = {"disconnect": 0, "discover_quick": 10, "statements": 15, "discover_f
             "pdf_enrich": 40, "token_check": 50}
 
 CARD_AWARE_FULL_SCAN = os.environ.get("CD_CARD_AWARE", "1") != "0"  # search known cards' numbers
-# "subjects": one year at a time, subjects only, statement PDFs only for incomplete cards
+# "monthly": month by month subjects, then statements and PDFs of incomplete cards over 6 months,
+# then a lifecycle pass (jobs._monthly_full_scan). "subjects": one year at a time, subjects only,
+# statement PDFs only for incomplete cards
 # (engine.subject_scan). Anything else: the card-aware scan.
 SCAN_MODE = os.environ.get("CD_SCAN_MODE", "card_aware")
 # Statement PDFs are indexed by the full scan (5 units per card) but not downloaded and read

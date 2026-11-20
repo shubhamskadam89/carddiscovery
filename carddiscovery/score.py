@@ -45,8 +45,8 @@ def evidence_weight(ev: Evidence) -> float:
         w *= MODIFIERS["name_mismatch"]
     if not ev.to_user:
         w *= MODIFIERS["not_to_user"]
-    if ev.via:  # a bill-payment app's word, not the bank's
-        w *= MODIFIERS.get("via_app", 0.8)
+    if ev.via and ev.type != T.STATEMENT:  # a bill-payment app's word, not the bank's
+        w *= MODIFIERS.get("via_app", 0.8)  # (except a bill: apps send those only for the user's own cards)
     return w
 
 
@@ -110,8 +110,10 @@ def score_all(cards: list[Card], now: datetime | None = None) -> None:
         c.status, c.status_confidence = status(c, now)
         if c.evidence and all(e.forwarded for e in c.evidence):
             c.flags.add("forwarded_only")
-        if c.evidence and all(e.via for e in c.evidence):
-            c.flags.add("app_only")  # people pay family members' cards through these apps too
+        if c.evidence and all(e.via for e in c.evidence) and not any(e.type == T.STATEMENT for e in c.evidence):
+            # People pay family members' cards through these apps too. A bill is different: the
+            # app sends one only for a card linked to the user's own account, so one is enough.
+            c.flags.add("app_only")
         if c.evidence and sum(e.name_match is False for e in c.evidence) > len(c.evidence) / 2:
             c.flags.add("name_mismatch")
 

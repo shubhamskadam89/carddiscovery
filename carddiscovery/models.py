@@ -106,6 +106,9 @@ class Evidence:
     used_body: bool = False
     test: bool = False  # came from a --test-sender address
     rules_version: str | None = None  # rules.active_version() when read; None on older rows
+    # An offer that names the held card with its number ("your HSBC Visa Platinum Credit
+    # Card ending with 9719"): its product is the card's, not what's being sold.
+    held: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -129,6 +132,7 @@ class Evidence:
             "used_body": self.used_body,
             "test": self.test,
             "rules_version": self.rules_version,
+            "held": self.held,
         }
 
     @classmethod
@@ -154,6 +158,7 @@ class Evidence:
             used_body=d.get("used_body", False),
             test=d.get("test", False),
             rules_version=d.get("rules_version"),
+            held=d.get("held", False),
         )
 
 
