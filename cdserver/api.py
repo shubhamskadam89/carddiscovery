@@ -1,6 +1,6 @@
 """API service (FastAPI). Serves the phone-frame page and the endpoints it calls.
 
-It can store a Gmail token (sealed with the vault) but never decrypt one: every
+It stores the Gmail token as Google returns it (plain JSON, not encrypted); every
 Gmail call after the first sign-in happens in the workers.
 """
 
@@ -36,7 +36,7 @@ class Api:
         self.pending: dict[str, dict] = {}
         self.lock = threading.Lock()
 
-    # ---- Gmail connect: the API receives Google's one-time code and seals the token
+    # ---- Gmail connect: the API receives Google's one-time code and stores the token
     def begin_connect(self, acc: dict, redirect_uri: str, years: int, names: list[str], pdf_opt_in: bool,
                       dob: str | None) -> str:
         url, state, flow = g.start_web_flow(config.GOOGLE_CLIENT_FILE, redirect_uri)
@@ -63,7 +63,7 @@ class Api:
         if g.SCOPES[0] not in granted:
             return "noscope"
         mailbox = g.GmailProvider(creds).mailbox()
-        blob = self.vault.seal(creds.to_json().encode(), f"gmail:{acc['id']}")
+        blob = creds.to_json().encode()  # stored as is: not encrypted
         dob_blob = self.vault.seal(p["dob"].encode(), f"dob:{acc['id']}") if p["dob"] else None
         with c.transaction():
             old = c.execute("SELECT mailbox, status FROM gmail_connections WHERE account_id = %s",
@@ -71,7 +71,8 @@ class Api:
             if old and old["status"] == "disconnecting":
                 return "expired"
             if old and old["mailbox"] != mailbox:  # a different Gmail account: start clean
-                for t in ("evidence", "statement_facts", "decisions", "card_index"):
+                for t in ("evidence", "statement_facts", "decisions", "card_index", "set_aside",
+                          "statement_pdf_reads"):
                     c.execute(f"DELETE FROM {t} WHERE account_id = %s", (acc["id"],))
                 c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (acc["id"],))
             c.execute(
@@ -151,7 +152,8 @@ class Api:
 
 def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
     api = Api(registry, names)
-    page = (Path(__file__).parent / "static" / "app.html").read_text()
+    page_file = Path(__file__).parent / "static" / "app.html"
+    page = page_file.read_text() if page_file.exists() else None  # server-only builds have no web page
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     origin = f"http://127.0.0.1:{config.API_PORT}"
 
@@ -192,6 +194,8 @@ def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
 
     @app.get("/")
     def index():
+        if page is None:
+            return j(404, {"error": "no web page in this build; use the /api endpoints"})
         return HTMLResponse(page.replace("__TOKEN__", api.token).replace("__NAMES__", json.dumps(", ".join(names))))
 
     @app.get("/api/config")

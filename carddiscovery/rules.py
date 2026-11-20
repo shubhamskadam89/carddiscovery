@@ -17,6 +17,7 @@ signature doesn't verify, so nobody can push rules that misread mail. Without
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import tomllib
@@ -40,13 +41,30 @@ def _data(name: str) -> bytes:
 def source_bundle() -> dict:
     """Bundle built from the source files in data/ (not signed)."""
     rules = json.loads(_data("rules.json"))
-    banks = tomllib.loads(_data("banks.toml").decode())["banks"]
-    return {**rules, "banks": banks}
+    data = tomllib.loads(_data("banks.toml").decode())
+    return {**rules, "banks": data["banks"], "apps": data.get("apps", {})}
 
 
 def canonical(bundle: dict) -> bytes:
     """Stable bytes to sign: sorted keys, no whitespace, UTF-8."""
     return json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def version_of(bundle: dict) -> str:
+    """Short content hash of a bundle: changes whenever any bank, alias, rule or weight does."""
+    return hashlib.sha256(canonical(bundle)).hexdigest()[:12]
+
+
+_active_version: str | None = None
+
+
+def active_version() -> str:
+    """Version of the rules in use (the activated bundle, else the source files).
+    Stamped on every evidence row, so rows read under older rules can be found later."""
+    global _active_version
+    if _active_version is None:
+        _active_version = version_of(source_bundle())
+    return _active_version
 
 
 def load_bundle(path: Path, public_key_pem: bytes | None = None) -> dict:
@@ -112,6 +130,8 @@ def build(out_dir: Path, private_path: Path = DEFAULT_KEY) -> tuple[Path, Path]:
 
 def activate(bundle: dict) -> None:
     """Make the classifier and scorer use this bundle's rules and weights."""
+    global _active_version
     from . import classify, score
     classify.configure(bundle["classify"])
     score.configure(bundle["score"])
+    _active_version = version_of(bundle)

@@ -31,7 +31,13 @@ def work(name: str | None = None, once: bool = False, idle_s: float = 0.5) -> No
                 return
             time.sleep(idle_s)
             continue
-        j = Job(c, row, reg, vault, name)
+        try:
+            j = Job(c, row, reg, vault, name)
+        except Exception as e:  # a job that can't even start is retried, never left "running"
+            outcome = queue.retry_or_fail(c, row, f"{type(e).__name__} at start: {str(e)[:300]}")
+            print(f"[worker {name}] job {row['id']} {row['kind']} user {row['account_id']}: {outcome} "
+                  f"(failed to start: {type(e).__name__})", flush=True)
+            continue
         t0 = time.monotonic()
         outcome = "done"
         probe = JobProbe()
@@ -57,7 +63,8 @@ def work(name: str | None = None, once: bool = False, idle_s: float = 0.5) -> No
         res = probe.as_dict() if hasattr(probe, "wall") else {}
         print(f"[worker {name}] job {j.id} {j.kind} user {j.account_id}: {outcome} "
               f"({j.meter.units} units, {time.monotonic() - t0:.1f}s, cpu {res.get('cpu_s', '-')}s, "
-              f"memory {res.get('rss_start_mb', '-')}→{res.get('rss_peak_mb', '-')} MB peak)", flush=True)
+              f"memory {res.get('rss_start_mb', '-')}→{res.get('rss_peak_mb', '-')} MB peak, "
+              f"waited on Google's limit {j.meter.backoff_s:.0f}s)", flush=True)
 
 
 def runs(row: dict, j: Job, probe: JobProbe) -> list[dict]:

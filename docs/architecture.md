@@ -124,10 +124,6 @@ From Google's Gmail API usage limits page, checked 2026-11-16. They apply to Clo
    - **Window size, measured** (5 years; all 13/13 correct). Real Gmail: 3-month windows 5,017 units, 1-month windows 5,557 units (61 windows need about 340 searches), 6-month windows with separate per-type searches 4,997 units. Offline dry run: 1 month 6,277, 3 months 5,497, 6 months 5,697, 12 months 6,857. Smaller windows read slightly fewer emails but need more searches; 3 months is the default (`CD_WINDOWS`, e.g. `1` or `1,2,3,6,12`).
    - **Number forms.** Gmail matches whole words, case-insensitively: `2846` matches "ending 2846" and "XXXX XXXX XXXX 2846" but **not** "XX2846" (checked on real Gmail). Every number is therefore searched as `2846 OR XX2846 OR XXXX2846 OR XXXXXXXX2846 OR XXXXXXXXXXXX2846` (Amex: also the 10 possible 5-digit forms), plus every masked form actually seen in that card's mail, e.g. "4375XXXXXXXX2846" (learned while reading; never a full number). A form we miss costs extra reads, never a missed card.
    - **Card index** (`card_index` table): per card, email count, learned number forms, the Gmail search for its statement PDFs and those emails' ids (newest first), so later jobs go straight to them. Gmail labels aren't an option with read-only access.
-   - **Only mail Gmail verified counts** (`cdserver/trust.py`). Bank-domain mail counts only if Gmail's own Authentication-Results show DMARC passing for a registered bank domain, or a DKIM signature from one. A forged From line, a bulk-mail service's own signature, look-alike domains and personal addresses never count. Failing mail is recorded so it is never read again, counted per bank ("Ignored 1,305 emails that claimed to be from a bank but failed Gmail's sender check"), never opened in full, and never creates a card, changes a status or teaches a number. Checked 2026-11-17: 11 of 12 bank domains publish DMARC `p=reject`, so Gmail rejects such forgeries on delivery; kotak.com publishes none.
-   - **Sender history and confirmation.** An exact bank address with verified mail in 2+ months is a known sender. A card is owned with a verified statement, welcome, dispatch, fee or lifecycle email, or verified mail in 2+ months, or one weak email (alert, payment, points) from a known sender; otherwise it shows as "New, waiting to confirm".
-   - **Big status changes need follow-up evidence.** An upgrade or replacement counts only if the new number appears in later verified mail or the old card goes quiet; a closure only if no verified spending follows it.
-   - **Bounded searches.** Only verified cards are excluded, most-mentioned first, capped at 2,500 characters: an unbounded list of fake numbers once made a 17 KB search that Gmail refused.
    - **Someone else's card is hidden:** if every email that names a cardholder names someone other than the user (lenient match: any shared name word counts), the card isn't shown. The user can still say it's theirs.
    - **Already-read emails are skipped** (the evidence table), and **if the budget runs out** the job stops cleanly and resumes later; the user sees "Still checking older emails".
    - The earlier read-everything scan remains behind a switch (`CD_CARD_AWARE=0`) for comparison.
@@ -273,9 +269,6 @@ The full scan is no longer limited by quota (no job waited for the per-minute li
 | Card-aware with 6-month windows, newest statement in full, learned number forms (5 years) | 5,232 | 61 s | **13/13** |
 | Each window's new cards looked up at once; statement PDFs not read (5 years) | 4,997 | 21 s | **13/13** |
 | 3-month windows with merged searches (5 years, current default) | 5,017 | 32 s | **13/13** |
-| Current version, forged mail at 1 in 20 of the last year, before the security-check rules | 6,787 | 78 s | 10/13 (3 real cards marked "Replaced") |
-| Same, 1-year lookback, 3 fake : 1 real in the last year, before the rules | 18,252 (scan crashed: search too long) | — | 1/9, 267 fake numbers to review |
-| **Same inbox after the security-check rules** | 28,104 (1,305 fakes read once and ignored) | about 5 min | **9/9, 0 to review** |
 
 ### Product-wide, against 80M units a day
 

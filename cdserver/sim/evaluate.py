@@ -79,13 +79,9 @@ def print_report(rep: dict) -> None:
         print(f"  {mark} {x['bank']:<6} {x['last4']:<5} {x.get('product') or '':<16} want {x['group']}/{x['status']:<18} "
               f"→ {x['result']}")
     if rep["must_not_find_hits"]:
-        hits = rep["must_not_find_hits"]
-        print(f"\n  Should not have become cards: {len(hits)} "
-              f"({sum(f['severity'] == 'BAD' for f in hits)} wrongly owned, the rest to review)")
-        for f in hits[:15]:
+        print("\n  Should not have become cards:")
+        for f in rep["must_not_find_hits"]:
             print(f"    {f['severity']}: {f['bank']} {f['last4']} ({f['why']}) → {f['got']}")
-        if len(hits) > 15:
-            print(f"    … and {len(hits) - 15} more")
     if rep["unexpected"]:
         print("\n  Not in the answer file:")
         for u in rep["unexpected"]:

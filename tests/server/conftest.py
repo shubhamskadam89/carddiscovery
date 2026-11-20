@@ -36,7 +36,8 @@ def database():
 def c(database):
     conn = database.connect()
     for t in ("jobs", "evidence", "cards", "statement_facts", "notifications", "decisions", "gmail_connections",
-              "sessions", "accounts", "quota_daily", "audit_log", "card_index"):
+              "sessions", "accounts", "quota_daily", "audit_log", "card_index", "set_aside",
+              "statement_pdf_reads"):
         conn.execute(f"TRUNCATE {t} RESTART IDENTITY CASCADE")
     yield conn
     conn.close()

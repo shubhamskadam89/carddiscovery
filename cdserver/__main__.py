@@ -26,18 +26,24 @@ def main() -> None:
     mon = sub.add_parser("monitor", help="sample memory and CPU of every cdserver process until Ctrl+C")
     mon.add_argument("--every", type=float, default=1.0)
     sim = sub.add_parser("sim", help="simulated 10k-email inbox: generate, dryrun, import, clean")
-    sim.add_argument("action", choices=["generate", "dryrun", "import", "import-forged", "import-flood", "clean"])
-    sim.add_argument("--flood", action="store_true", help="dryrun: include the 19-fake-per-real flood")
-    sim.add_argument("--forged", action="store_true", help="dryrun: include the forged last-12-months mail")
+    sim.add_argument("action", choices=["generate", "dryrun", "import", "clean"])
     sim.add_argument("--to", default="shubhamtester183@gmail.com", help="the test inbox")
     sim.add_argument("--total", type=int, default=10_000)
     sim.add_argument("--seed", type=int, default=7)
     sim.add_argument("--years", type=int, default=3, choices=[1, 3, 5])
+    au = sub.add_parser("audit", help="development only: how a consenting inbox's bank mail looks to the engine")
+    au.add_argument("--account", type=int, required=True)
+    au.add_argument("--every", type=int, default=4, help="read every Nth email from known senders")
+    au.add_argument("--rate", type=int, default=2000, help="Gmail units per minute (Google allows 6,000)")
     ev = sub.add_parser("evaluate", help="compare a user's cards with the simulated inbox's answer file")
     ev.add_argument("--mailbox", default="shubhamtester183@gmail.com")
     args = p.parse_args()
 
     from . import config, db
+    if args.cmd == "audit":
+        from .audit import run as audit
+        print(audit(args.account, args.every, args.rate))
+        return
     if args.cmd == "migrate":
         print("applied:", db.migrate() or "nothing new")
     elif args.cmd == "api":
@@ -47,7 +53,7 @@ def main() -> None:
         db.migrate()
         app, api = create_app(registry(), [n.strip() for n in args.name.split(",") if n.strip()])
         print(f"API: http://127.0.0.1:{config.API_PORT}/?t={api.token}", flush=True)
-        uvicorn.run(app, host="127.0.0.1", port=config.API_PORT, log_level="warning")
+        uvicorn.run(app, host=config.API_BIND, port=config.API_PORT, log_level="warning")
     elif args.cmd == "worker":
         from .worker import work
         work(once=args.once)
@@ -110,24 +116,7 @@ def _sim(args) -> None:
     from .sim import generate as gen
     truth_file = config.HOME / "sim" / "truth.json"
     mails, truth = gen.build(args.to, args.total, args.seed)
-    from datetime import timedelta
-    from .sim.forged import build_forged
-    last_year = sum(1 for m in mails if m.when.date() > gen.TODAY - timedelta(days=365))
-    forged, forged_truth = build_forged(args.to, last_year)
-    # Forged numbers must never become cards; listing them is harmless when they aren't imported.
-    truth["must_not_find"] += [f for f in forged_truth if f["last4"] not in {x["last4"] for x in truth["must_not_find"]}]
-    truth["forged"] = {"count": len(forged), "last_year_total": last_year + len(forged)}
     gen.write_truth(truth, truth_file)
-    from .sim.forged import build_flood
-    flood, flood_truth = build_flood(args.to, last_year, 19, already=len(forged))
-    seen_l4 = {x["last4"] for x in truth["must_not_find"]}
-    truth["must_not_find"] += [f for f in flood_truth if f["last4"] not in seen_l4]
-    truth["flood"] = {"fake": len(forged) + len(flood), "real_last_year": last_year}
-    gen.write_truth(truth, truth_file)
-    if getattr(args, "forged", False) or getattr(args, "flood", False):
-        mails = mails + forged
-    if getattr(args, "flood", False):
-        mails = mails + flood
     if args.action == "generate":
         print(f"{len(mails)} emails for {args.to}, {mails[0].when:%Y-%m-%d} to {mails[-1].when:%Y-%m-%d}; "
               f"answer file: {truth_file}")
@@ -150,17 +139,10 @@ def _sim(args) -> None:
                       f"{s.get('header_reads', '-')}  full {s.get('full_reads', '-')}  reopened {s.get('reopened', '-')}  "
                       f"listed {s.get('listed', '-')}  by kind {s['units_by_kind']}")
             print_report(evaluate(c, acc, truth, args.years, reg))
-    elif args.action in ("import", "import-forged", "import-flood", "clean"):
+    elif args.action in ("import", "clean"):
         from .sim import importer
         if args.action == "import":
             importer.import_all(mails, args.to)
-        elif args.action == "import-flood":
-            print(f"{len(flood)} more fake emails: with the {len(forged)} forged ones, 19 fake for each of the "
-                  f"{last_year} real emails of the last 12 months")
-            importer.import_all(flood, args.to)
-        elif args.action == "import-forged":
-            print(f"{len(forged)} forged emails over the last 12 months (1 in 20 of {last_year + len(forged)})")
-            importer.import_all(forged, args.to)
         else:
             importer.clean(args.to)
 

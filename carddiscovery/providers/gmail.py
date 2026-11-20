@@ -119,6 +119,8 @@ class GmailProvider:
         self.user_id = user_id
         self._profile = None
         self.calls = 0
+        self.throttled = 0      # replies of 403/429/5xx that were retried
+        self.backoff_s = 0.0    # time spent waiting before those retries
 
     # ---- identity ------------------------------------------------------
     def mailbox(self) -> str:
@@ -254,7 +256,7 @@ class GmailProvider:
             # Rebuild failed requests from scratch before retrying.
             pending = {rid: requests[rid] for rid in failed}
             if pending:
-                time.sleep(delay)
+                self._backoff(delay, len(pending))
                 delay = min(delay * 2, 32)
         return done
 
@@ -268,10 +270,15 @@ class GmailProvider:
                 return request.execute()
             except HttpError as e:
                 if e.resp.status in (403, 429, 500, 503) and attempt < MAX_RETRIES - 1:
-                    time.sleep(delay)
+                    self._backoff(delay, 1)
                     delay = min(delay * 2, 32)
                     continue
                 raise
+
+    def _backoff(self, delay: float, n: int) -> None:
+        self.throttled += n
+        self.backoff_s += delay
+        time.sleep(delay)
 
 
 TRUSTED_AUTHSERV = "mx.google.com"

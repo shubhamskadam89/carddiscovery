@@ -41,6 +41,8 @@ class Meter:
         self._flush_every = flush_every_s
         self._last_flush = time.monotonic()
         self.unflushed = 0
+        self.throttled = 0      # filled from the Gmail client: Google's rate-limit replies
+        self.backoff_s = 0.0
 
     @property
     def remaining(self) -> int:
@@ -88,7 +90,8 @@ class Meter:
 
     def summary(self) -> dict:
         return {"units": self.units, "budget": self.budget, "units_by_kind": dict(self.by_kind),
-                "calls": dict(self.calls), "waited_s": round(self.waited_s, 1)}
+                "calls": dict(self.calls), "waited_s": round(self.waited_s, 1),
+                "throttled": self.throttled, "backoff_s": round(self.backoff_s, 1)}
 
 
 class MeteredGmail(GmailProvider):
@@ -152,8 +155,16 @@ class MeteredGmail(GmailProvider):
     # ---- statement PDFs ---------------------------------------------------
     def pdf_attachments(self, message_id: str) -> list[tuple[str, str]]:
         """(filename, attachment id) of PDFs. Needs a full read: only it lists attachment ids."""
+        return self.full_with_pdfs(message_id)[1]
+
+    def full_with_pdfs(self, message_id: str):
+        """One full read (60 units): the email, with its body and attachment names, and its
+        PDFs as (filename, attachment id)."""
         self.meter.charge("full")
         raw = self._exec(self.svc.users().messages().get(userId=self.user_id, id=message_id, format="full"))
+        m = _to_meta(raw)
+        m.body, names = _extract_body(raw.get("payload", {}))
+        m.attachment_names = tuple(names)
         out: list[tuple[str, str]] = []
 
         def walk(part: dict) -> None:
@@ -165,7 +176,7 @@ class MeteredGmail(GmailProvider):
                 walk(sub)
 
         walk(raw.get("payload", {}))
-        return out
+        return m, out
 
     def attachment(self, message_id: str, attachment_id: str, max_bytes: int = 10_000_000) -> bytes:
         self.meter.charge("attachment")

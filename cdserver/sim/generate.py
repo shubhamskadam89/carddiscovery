@@ -48,9 +48,7 @@ class Mail:
 
     def raw(self, to: str) -> bytes:
         m = EmailMessage()
-        if self.auth and self.auth.startswith("mx.google.com;"):
-            m["Authentication-Results"] = self.auth  # a full result, e.g. signed by a mail service but DMARC failed
-        elif self.auth:
+        if self.auth:
             verdict, dom = self.auth.split(":", 1)
             # Gmail adds this header on delivery; imported mail has none, so we write the
             # result Gmail would have added (pass for real bank mail, fail for forged).

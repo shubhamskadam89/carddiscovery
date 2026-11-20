@@ -14,8 +14,17 @@ from email.utils import getaddresses
 from . import extract
 from .models import Evidence, EvidenceType as T, MessageMeta
 from .registry import TEST_BANK_ID, Registry, sender_domain
+from .rules import active_version
 
-_DEBIT_SUBJECT = re.compile(r"\bdebit\s+card\b", re.IGNORECASE)
+# A subject naming a debit card or a bank account (and not a credit card) settles it:
+# "Email Account Statement of your HDFC Bank Account ***7785", "charges on your Savings
+# A/c XX8466". Their bodies often mention credit cards (charges tables, ads), which made
+# them read as credit-card statements and turned account numbers into cards.
+_DEBIT_SUBJECT = re.compile(
+    r"\bdebit\s+card\b|\b(?:savings|current|salary)\s+(?:a/c|acct|account)\b|\bbank\s+account\b"
+    r"|\baccount\s+statement\b|\ba/c\b"
+    # Tax papers from the bank ("Your Annual Tax Statement for FY 2025-26 is ready"), not card statements
+    r"|\btax\s+statement\b|\binterest\s+certificate\b|\btds\b|\bform\s*16a?\b|\b26as\b", re.IGNORECASE)
 _DATE_TAG = re.compile(r"\[date:\s*(\d{4})-(\d{2})-(\d{2})\]", re.IGNORECASE)
 
 def _r(p: str) -> re.Pattern:
@@ -76,13 +85,14 @@ def classify(msg: MessageMeta, bank_id: str | None, has_last4: bool) -> T:
     head = f"{subject}\n{msg.snippet or ''}"
     full = core_text(msg.text())
 
-    if OTP.search(subject):
-        return T.OTP
-    # A subject that says "debit card" (and not credit) settles it, whatever ads the
-    # body carries ("Get more rewards with a Credit Card!").
+    # A subject that says "debit card" or names a bank account (and not credit) settles it,
+    # whatever ads the body carries ("Get more rewards with a Credit Card!"). Checked before
+    # OTP, so a debit-card OTP is never read as a credit card's.
     if (bank_id not in CREDIT_ONLY_BANKS and _DEBIT_SUBJECT.search(subject)
             and not CREDIT_WORDS.search(subject)):
         return T.NOT_CREDIT_CARD
+    if OTP.search(subject):
+        return T.OTP
     # Debit/account mail often carries a "get a credit card" ad; ignore ad sentences
     # when deciding whether the email is about a credit card at all.
     if (bank_id not in CREDIT_ONLY_BANKS and NON_CREDIT.search(head)
@@ -187,29 +197,45 @@ def analyze(
             msg.date = datetime(int(m[1]), int(m[2]), int(m[3]), tzinfo=timezone.utc)
     else:
         bank_id = registry.bank_for_sender(msg.sender)
+    # Bill-payment apps (CRED, ...): the bank is the one the email names. Counted only if
+    # it also names a card number; "pay any card bill on CRED" says nothing about the user.
+    app = None if test or bank_id else registry.app_for_sender(msg.sender)
+    if app:
+        bank_id = registry.bank_from_text(text)
 
     l4 = extract.last4s(text)
+    if bank_id and bank_id not in CREDIT_ONLY_BANKS:
+        # At a bank with savings accounts, "your account XX7785" is an account number.
+        accounts = extract.account_last4s(text)
+        l4 = [x for x in l4 if x not in accounts]
+    if app and not l4:
+        bank_id = None
     etype = classify(msg, bank_id, bool(l4))
     # Products come from the email minus boilerplate and ad banners, so a statement
     # that also advertises another card still names the card it is about.
     products, best = _products(registry, bank_id, msg.subject or "", text, l4)
+    products, best, loose = _refine_variant(registry, bank_id, etype, text, products, best)
     return Evidence(
         message_id=msg.message_id,
         date=msg.date,
         bank_id=bank_id,
         type=etype,
         last4s=l4,
+        last_digits=None if l4 else extract.partial_last_digits(text),
+        number_prefixes={k: v for k, v in extract.number_prefixes(text).items() if k in l4},
         products=products,
         product=best,
         product_raw=None if products else _clean_raw_product(extract.product_raw(text), registry),
-        dkim_pass=sender_signed(msg) if test else dkim_pass(msg, bank_id, registry),
+        variant_loose=loose,
+        dkim_pass=sender_signed(msg) if (test or app) else dkim_pass(msg, bank_id, registry),
+        via=app,
         forwarded=is_forwarded(msg),
         to_user=addressed_to_user(msg, user_addresses or []),
         name_match=extract.name_matches(extract.holder_name(text), user_names or []),
         addon=extract.is_addon(text),
         used_body=msg.body is not None,
         test=test,
-        sender=(getaddresses([msg.sender or ""])[0][1].lower() or None) if msg.sender else None,
+        rules_version=active_version(),
     )
 
 
@@ -236,7 +262,40 @@ def _products(registry: Registry, bank_id: str | None, subject: str, text: str,
     return products, products[0]
 
 
-_FILLER = {"your", "the", "a", "an", "my", "bank", "card", "new", "dear", "of", "for", "on"}
+# Mail whose products are about change or selling ("upgraded to Regalia Gold", offers):
+# the bare name there is meant as written, so no variant is read into it.
+_NO_VARIANT_REFINE = {T.UPGRADE, T.REPLACEMENT, T.OFFER_EXISTING_CARD, T.PROMOTIONAL}
+# Words just before a variant that mean it's being offered or moved to, not held.
+_VARIANT_CUE = re.compile(
+    r"\b(upgrad\w*|eligible|appl(y|ied|ication)|introduc\w*|offer\w*|switch\w*|avail\w*|"
+    r"convert\w*|migrat\w*|mov(e|ed|ing)\s+to|exclusive|launch\w*|get|presenting|explore|discover)\b",
+    re.IGNORECASE)
+_CUE_WINDOW = 50
+
+
+def _refine_variant(registry: Registry, bank_id: str | None, etype: T, text: str,
+                    products: list[str], best: str | None) -> tuple[list[str], str | None, bool]:
+    """If the email matched only a family's bare name ("Regalia"), read the variant
+    from the same email when exactly one is written there loosely ("Regalia Gold -
+    your statement"). Anything less certain keeps the bare name."""
+    if not bank_id or not best or etype in _NO_VARIANT_REFINE:
+        return products, best, False
+    variants = registry.families(bank_id).get(best)
+    if not variants or any(v in products for v in variants):
+        return products, best, False  # no family, or a variant already matched in full
+    clean = _without_offers(core_text(text))
+    found = {v for pos, v in registry.variants_in(bank_id, clean, best)
+             if not _VARIANT_CUE.search(clean[max(0, pos - _CUE_WINDOW):pos])}
+    if len(found) != 1:
+        return products, best, False
+    variant = found.pop()
+    return [variant if p == best else p for p in products], variant, True
+
+
+_FILLER = {"your", "the", "a", "an", "my", "bank", "card", "new", "dear", "of", "for", "on",
+           # words of notification subjects, not product names ("Delivery Alert", "Activate")
+           "alert", "alerts", "delivery", "delivered", "dispatch", "dispatched", "update", "notification",
+           "activate", "activation", "otp", "password", "statement", "transaction"}
 
 
 def _clean_raw_product(raw: str | None, registry: Registry) -> str | None:
@@ -246,7 +305,9 @@ def _clean_raw_product(raw: str | None, registry: Registry) -> str | None:
         return None
     for pattern, _ in registry._mention_patterns:
         raw = pattern.sub(" ", raw)
-    words = [w for w in raw.split() if w.lower() not in _FILLER]
+    # Bank names written as one word ("Yesbank") are banks too.
+    squashed = {re.sub(r"\W", "", b.name).lower() for b in registry.banks.values()} | set(registry.banks)
+    words = [w for w in raw.split() if w.lower() not in _FILLER and re.sub(r"\W", "", w).lower() not in squashed]
     return " ".join(words) or None
 
 

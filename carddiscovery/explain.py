@@ -29,6 +29,7 @@ _NOUN = {
     T.REPLACEMENT: ("replacement card email", "replacement card emails"),
     T.CLOSURE: ("closure confirmation", "closure confirmations"),
     T.OFFER_EXISTING_CARD: ("offer naming this card", "offers naming this card"),
+    T.OTP: ("one-time password email for a payment", "one-time password emails for payments"),
     T.UNKNOWN: ("other bank email", "other bank emails"),
 }
 _ORDER = list(_NOUN)  # strongest-first order for listing evidence
@@ -51,7 +52,9 @@ class Explanation:
 def explain(card: Card, registry: Registry) -> Explanation:
     bank = registry.banks[card.bank_id].name if card.bank_id in registry.banks else card.bank_id
     product = card.product or "credit card (variant unknown)"
-    number = f" ••{card.last4}" if card.last4 else ""
+    number = f" ••{card.last4}" if card.last4 else (f" ••{card.partial}" if card.partial else "")
+    if card.last4 and card.twin and card.twin.isdigit():
+        number = f" {card.twin}••{card.last4}"  # two cards end in these 4 digits: show how they start
     title = f"{bank} {product}{number}"
 
     by_type: dict[T, list[datetime]] = {}
@@ -116,12 +119,19 @@ def _concerns(card: Card) -> list[str]:
     f = card.flags
     if "name_mismatch" in f:
         out.append("The emails are addressed to someone else by name.")
+    if "app_only" in f:
+        out.append("We've only seen it in bill-payment app emails (such as CRED), which can also "
+                   "be used to pay someone else's card.")
     if "forwarded_only" in f:
         out.append("We only saw it in an email forwarded to you.")
     if "addon" in f:
         out.append("It looks like an add-on card listed on another card's statement.")
-    if "ambiguous" in f:
-        out.append("We couldn't tell which of your cards from this bank it belongs to.")
+    if "maybe_new" in f:
+        out.append("The bank sent a welcome or approval email well after your other card "
+                   "from this bank started, so this may be a new card.")
+    if "same_last4" in f:
+        out.append("Another card from this bank ends in the same 4 digits; we told them apart "
+                   "by the card names in the bank's emails.")
     if "no_identifier" in f:
         out.append("The bank's emails didn't include a card number.")
     if card.evidence and not any(e.dkim_pass for e in card.evidence):

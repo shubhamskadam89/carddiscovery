@@ -8,22 +8,19 @@ from datetime import datetime, timezone
 
 from carddiscovery.explain import explain
 from carddiscovery.registry import Registry
-from carddiscovery.resolve import resolve
+from carddiscovery.resolve import resolve, resolve_full
 from carddiscovery.score import group, score_all
 
-from . import trust
 from .engine import EvidenceStore
 
 GROUPS = ["owned", "review", "history", "rejected"]
 
 
 def rebuild(c, account_id: int, registry: Registry) -> dict:
-    """Replace the account's gmail cards. Returns {"new": [keys], "apps": [...]}."""
-    stored = list(EvidenceStore(c, account_id).known().values())
-    evs, rejected = trust.split_verified(stored)      # 1. only Gmail-verified bank mail counts
-    known = trust.known_senders(evs)                    # 2. sender history
-    evs, dropped = trust.corroborate(evs)               # 4. big status changes need follow-up
-    cards, apps = resolve(evs)
+    """Replace the account's gmail cards (and set-aside emails). Returns {"new": [keys], "apps": [...]}."""
+    evs = list(EvidenceStore(c, account_id).known().values())
+    res = resolve_full(evs)
+    cards, apps = res.cards, res.applications
     score_all(cards, datetime.now(timezone.utc))
     answers = {r["card_key"]: r["decision"] for r in
                c.execute("SELECT card_key, decision FROM decisions WHERE account_id = %s", (account_id,))}
@@ -38,11 +35,7 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
             continue
         e = explain(card, registry)
         g = group(card)
-        status_label, headline = e.status, e.headline
-        if g in ("owned", "review") and card.decision != "yes" and not trust.confirmed(card, known):  # 3. confirmation
-            g, status_label = "review", "New, waiting to confirm"
-            headline = "Seen in one verified bank email so far; it's confirmed when more of its mail arrives."
-        view = {"key": card.decision_key, "title": e.title, "status": status_label, "headline": headline,
+        view = {"key": card.decision_key, "title": e.title, "status": e.status, "headline": e.headline,
                 "evidence": e.evidence, "concerns": e.concerns, "question": e.question,
                 "decision": card.decision, "bank": card.bank_id, "last4": card.last4, "product": card.product,
                 "group": g, "first_seen": card.first_seen.isoformat() if card.first_seen else None,
@@ -53,18 +46,27 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
         with c.cursor() as cur:
             cur.executemany("INSERT INTO cards (account_id, source, card_key, bank_id, last4, product, grp, view) "
                             "VALUES (%s, 'gmail', %s, %s, %s, %s, %s, %s)", rows)
+        c.execute("DELETE FROM set_aside WHERE account_id = %s", (account_id,))
+        with c.cursor() as cur:
+            cur.executemany("INSERT INTO set_aside (account_id, message_id, last4, bank_id, type, reason, "
+                            "candidates, used_body) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                            [(account_id, s.message_id, s.last4 or "", s.bank_id, s.type.value, s.reason,
+                              s.candidates, s.used_body) for s in res.set_aside])
     new = [r[1] for r in rows if r[1] not in before and r[5] in ("owned", "review")]
     app_view = [{"bank": registry.banks[a.bank_id].name if a.bank_id in registry.banks else a.bank_id,
                  "product": a.product, "status": a.status} for a in apps]
-    return {"new": new, "apps": app_view, "count": len(rows), "hidden": hidden,
-            "rejected": sum(rejected.values()), "rejected_by_bank": dict(rejected), "uncorroborated": dropped}
+    return {"new": new, "apps": app_view, "count": len(rows), "hidden": hidden, "set_aside": len(res.set_aside)}
 
 
 def _someone_elses(card) -> bool:
-    """Every email about this card that names a cardholder names someone other than the user.
-    (Name matching is lenient: any shared name word counts as a match.)"""
-    named = [e.name_match for e in card.evidence if e.name_match is not None]
-    return bool(named) and not any(named)
+    """At least two of the bank's own emails about this card name a cardholder, and every one
+    that does names someone other than the user. (Name matching is lenient: any shared name
+    word counts as a match.) Names read from OTP mail and bill-payment app mail don't count,
+    and one mismatch isn't enough: a single OTP's misread name once hid a card with 15 emails."""
+    from carddiscovery.models import EvidenceType as T
+    named = [e.name_match for e in card.evidence
+             if e.name_match is not None and e.type != T.OTP and not e.via]
+    return len(named) >= 2 and not any(named)
 
 
 def view(c, account_id: int) -> dict:
@@ -93,7 +95,7 @@ def view(c, account_id: int) -> dict:
 
 
 def applications(c, account_id: int, registry: Registry) -> list[dict]:
-    evs, _ = trust.split_verified(list(EvidenceStore(c, account_id).known().values()))
+    evs = list(EvidenceStore(c, account_id).known().values())
     _, apps = resolve(evs)
     return [{"bank": registry.banks[a.bank_id].name if a.bank_id in registry.banks else a.bank_id,
              "product": a.product, "status": a.status} for a in apps]

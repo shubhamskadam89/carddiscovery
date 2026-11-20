@@ -45,6 +45,8 @@ def evidence_weight(ev: Evidence) -> float:
         w *= MODIFIERS["name_mismatch"]
     if not ev.to_user:
         w *= MODIFIERS["not_to_user"]
+    if ev.via:  # a bill-payment app's word, not the bank's
+        w *= MODIFIERS.get("via_app", 0.8)
     return w
 
 
@@ -99,7 +101,7 @@ def status(card: Card, now: datetime | None = None) -> tuple[Status, float]:
     return Status.DORMANT, 0.5
 
 
-REVIEW_FLAGS = {"addon", "ambiguous", "no_identifier"}
+REVIEW_FLAGS = {"addon", "maybe_new", "no_identifier", "same_last4"}
 
 
 def score_all(cards: list[Card], now: datetime | None = None) -> None:
@@ -108,6 +110,8 @@ def score_all(cards: list[Card], now: datetime | None = None) -> None:
         c.status, c.status_confidence = status(c, now)
         if c.evidence and all(e.forwarded for e in c.evidence):
             c.flags.add("forwarded_only")
+        if c.evidence and all(e.via for e in c.evidence):
+            c.flags.add("app_only")  # people pay family members' cards through these apps too
         if c.evidence and sum(e.name_match is False for e in c.evidence) > len(c.evidence) / 2:
             c.flags.add("name_mismatch")
 
@@ -120,7 +124,7 @@ def group(card: Card) -> str:
         return "history"
     if card.decision == "yes":
         return "owned"
-    blocking = (card.flags & REVIEW_FLAGS) | ({"forwarded_only", "name_mismatch"} & card.flags)
+    blocking = (card.flags & REVIEW_FLAGS) | ({"forwarded_only", "name_mismatch", "app_only"} & card.flags)
     if card.ownership >= OWNED_THRESHOLD and not blocking:
         return "owned"
     return "review"

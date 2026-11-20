@@ -71,8 +71,9 @@ def test_sparse_alerts_cost_one_search_per_sender_group(tmp_path):
     box = FakeGmail([msg(1, "Your ICICI Bank Coral Credit Card Statement", "card ending 1111", now)])
     res = discover(box, Registry.load(), Ledger(tmp_path / "l.db"))
     alert_searches = [q for q in box.searches if q.family == "alerts"]
-    assert len(alert_searches) == 2  # one per sender group, no splitting
-    assert res.stats.queries == len(box.searches) < 15
+    groups = -(-len(Registry.load().all_domains()) // 25)
+    assert len(alert_searches) == groups  # one per sender group, no splitting
+    assert res.stats.queries == len(box.searches) < 8 * groups
 
 
 def test_dense_alerts_are_split_until_every_card_is_found(tmp_path):

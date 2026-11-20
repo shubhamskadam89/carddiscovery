@@ -47,11 +47,12 @@ CARD_EVIDENCE_TYPES = {
     EvidenceType.REPLACEMENT,
     EvidenceType.CLOSURE,
     EvidenceType.OFFER_EXISTING_CARD,
+    EvidenceType.OTP,  # only with a card number, and only for a card other mail already shows
 }
 
 APPLICATION_TYPES = {EvidenceType.APPLICATION_RECEIVED, EvidenceType.APPLICATION_REJECTED}
 
-USAGE_TYPES = {EvidenceType.TRANSACTION_ALERT, EvidenceType.STATEMENT, EvidenceType.PAYMENT}
+USAGE_TYPES = {EvidenceType.TRANSACTION_ALERT, EvidenceType.STATEMENT, EvidenceType.PAYMENT, EvidenceType.OTP}
 
 
 @dataclass
@@ -87,17 +88,24 @@ class Evidence:
     bank_id: str | None
     type: EvidenceType
     last4s: list[str] = field(default_factory=list)
+    # Leading digits shown before the mask, per last4: {"4321": ["4375"]}. Masked
+    # numbers already carry these ("4375XXXXXXXX4321"); never a full number.
+    number_prefixes: dict[str, list[str]] = field(default_factory=dict)
+    # Last 2-3 digits when that's all the email shows ("ending XX87"); only without last4s.
+    last_digits: str | None = None
     products: list[str] = field(default_factory=list)  # canonical names, in order of appearance
     product: str | None = None  # the product this email is most likely about
     product_raw: str | None = None
-    dkim_pass: bool = False
+    variant_loose: bool = False  # the variant came from the loose family match, not an alias
+    dkim_pass: bool = False  # for app mail: the app's own domain signed it
+    via: str | None = None  # bill-payment app that sent it ("cred"); None for the bank's own mail
     forwarded: bool = False
     to_user: bool = True
     name_match: bool | None = None  # None = no name found in the email
     addon: bool = False
     used_body: bool = False
     test: bool = False  # came from a --test-sender address
-    sender: str | None = None  # From address only, lower case (for sender history)
+    rules_version: str | None = None  # rules.active_version() when read; None on older rows
 
     def to_dict(self) -> dict:
         return {
@@ -106,17 +114,21 @@ class Evidence:
             "bank_id": self.bank_id,
             "type": self.type.value,
             "last4s": self.last4s,
+            "number_prefixes": self.number_prefixes,
+            "last_digits": self.last_digits,
             "products": self.products,
             "product": self.product,
             "product_raw": self.product_raw,
+            "variant_loose": self.variant_loose,
             "dkim_pass": self.dkim_pass,
+            "via": self.via,
             "forwarded": self.forwarded,
             "to_user": self.to_user,
             "name_match": self.name_match,
             "addon": self.addon,
             "used_body": self.used_body,
             "test": self.test,
-            "sender": self.sender,
+            "rules_version": self.rules_version,
         }
 
     @classmethod
@@ -127,17 +139,21 @@ class Evidence:
             bank_id=d["bank_id"],
             type=EvidenceType(d["type"]),
             last4s=list(d.get("last4s", [])),
+            number_prefixes={k: list(v) for k, v in (d.get("number_prefixes") or {}).items()},
+            last_digits=d.get("last_digits"),
             products=list(d.get("products", [])),
             product=d.get("product"),
             product_raw=d.get("product_raw"),
+            variant_loose=d.get("variant_loose", False),
             dkim_pass=d.get("dkim_pass", False),
+            via=d.get("via"),
             forwarded=d.get("forwarded", False),
             to_user=d.get("to_user", True),
             name_match=d.get("name_match"),
             addon=d.get("addon", False),
             used_body=d.get("used_body", False),
             test=d.get("test", False),
-            sender=d.get("sender"),
+            rules_version=d.get("rules_version"),
         )
 
 
@@ -159,6 +175,10 @@ class Card:
     evidence: list[Evidence] = field(default_factory=list)
     product_history: list[tuple[datetime, str]] = field(default_factory=list)
     replaced_by: "Card | None" = None
+    # Only set in the rare case of two cards at one bank ending in the same 4 digits:
+    # their leading digits ("4375") or, failing that, their product line ("Millennia").
+    twin: str | None = None
+    partial: str | None = None  # a card with no last4: the last 2-3 digits its mail shows, if any
     flags: set[str] = field(default_factory=set)
     ownership: float = 0.0
     status: Status = Status.UNKNOWN
@@ -167,16 +187,17 @@ class Card:
 
     @property
     def key(self) -> str:
-        return f"{self.bank_id}:{self.last4 or 'unknown'}:{self.product or 'unknown'}"
+        twin = f":{self.twin}" if self.twin else ""
+        return f"{self.bank_id}:{self.last4 or 'unknown'}{twin}:{self.product or 'unknown'}"
 
     @property
     def decision_key(self) -> str:
         """Stable id for remembering the user's answer across runs. A numbered card
-        is its bank + last4 (the product can be corrected later); a card without a
-        number is its bank + product."""
+        is its bank + last4 (the product can be corrected later), plus its twin tag in
+        the rare same-last4 case; a card without a number is its bank + product."""
         if self.last4:
-            return f"{self.bank_id}:{self.last4}"
-        return f"{self.bank_id}:product:{self.product or 'unknown'}"
+            return f"{self.bank_id}:{self.last4}" + (f":{self.twin}" if self.twin else "")
+        return f"{self.bank_id}:product:{self.product or 'unknown'}" + (f":{self.partial}" if self.partial else "")
 
     @property
     def first_seen(self) -> datetime | None:

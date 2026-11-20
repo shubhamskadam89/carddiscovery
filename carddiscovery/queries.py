@@ -105,7 +105,7 @@ def plan(
     out: list[Query] = []
     for family, words in FAMILIES.items():
         for c in chunks:
-            out.append(Query(family=family, senders=c, subject_any=words, exclude_subject=("otp",),
+            out.append(Query(family=family, senders=c, subject_any=words, exclude_subject=(),
                              after=start))
 
     # Alerts are sampled adaptively: one capped search over the whole range per
@@ -114,13 +114,13 @@ def plan(
     for c in chunks:
         out.append(Query(
             family="alerts", senders=c, subject_any=SAMPLED_FAMILY_SUBJECTS,
-            exclude_subject=("otp",), after=start, before=end,
+            exclude_subject=(), after=start, before=end,
             max_results=alerts_per_window,
         ))
 
     for c in chunks:
         out.append(Query(
             family="catch_all", senders=c, text_any=CATCH_ALL_TEXT,
-            exclude_subject=("otp",), after=start, max_results=catch_all_cap,
+            exclude_subject=(), after=start, max_results=catch_all_cap,
         ))
     return out

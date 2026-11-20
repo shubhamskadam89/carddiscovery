@@ -30,8 +30,15 @@ QUICK_FAMILIES = ("statement", "onboarding", "lifecycle")
 NO_PROMOS = ("-category:promotions",)
 # Subject words that mark mail we never need to read: filtering them in the search
 # itself is free, reading them costs 20 units each.
-NOISE_SUBJECT = ("otp", "one time password", "debit", "savings", "pre-approved", "preapproved", "apply now",
+# OTP mail is searched: it often names the card ("OTP for transaction on your card XX5630"),
+# which shows the card in use. Only the card number and date are kept, never the code.
+NOISE_SUBJECT = ("debit", "savings", "pre-approved", "preapproved", "apply now",
                  "lifetime free", "introducing", "last chance", "instant approval")
+# Offers in the Promotions tab that name "card" in the subject, last 12 months only: offers
+# to existing cardholders ("EMI on your Credit Card XX7776") can be the only mail naming a
+# card. Measured on a real inbox: about 2.5% of promotional mail names a card number, so
+# reading all of it (about 14x a normal scan) isn't worth it; this slice costs about 4,000 units.
+CARD_OFFER_SUBJECT = ("card",)
 # Families whose keywords ("upgrade", "reward", "points", "welcome") also appear in offers.
 OFFER_PRONE = {"onboarding", "lifecycle", "application"}
 PAYMENTS_SAMPLE = 40  # payment emails only confirm a card we already know; a sample is enough
@@ -39,6 +46,15 @@ PAYMENTS_SAMPLE = 40  # payment emails only confirm a card we already know; a sa
 
 def _chunks(items: list[str], n: int = 25) -> list[tuple[str, ...]]:
     return [tuple(items[i:i + n]) for i in range(0, len(items), n)]
+
+
+def _sender_groups(registry: Registry) -> list[tuple[str, ...]]:
+    """`from:` groups for every search: the listed bank and app domains, plus one group for
+    all of .bank.in, so a bank's new or unlisted .bank.in name (hsbc.bank.in, icici.bank.in)
+    is searched too. Gmail matches subdomains, so "bank.in" covers every bank's mail there;
+    which bank it is, and whether to trust it, is decided by Registry.bank_for_domain. Its own
+    group, so it can't crowd the sampled alerts of the other groups."""
+    return _chunks(registry.all_domains()) + [("bank.in",)]
 
 
 def _years_ago(today: date, years: int) -> date:
@@ -49,13 +65,13 @@ def quick_plan(registry: Registry, today: date) -> list[Query]:
     start = _years_ago(today, config.QUICK_LOOKBACK_YEARS)
     return [Query(family=f, senders=c, subject_any=FAMILIES[f], exclude_subject=NOISE_SUBJECT, after=start,
                   max_results=config.QUICK_MAX_READS, extra=NO_PROMOS)
-            for f in QUICK_FAMILIES for c in _chunks(registry.all_domains())]
+            for f in QUICK_FAMILIES for c in _sender_groups(registry)]
 
 
 def full_plan(registry: Registry, today: date, years: int) -> list[Query]:
     start = _years_ago(today, years)
     end = today + timedelta(days=1)  # Gmail's before: is exclusive
-    chunks = _chunks(registry.all_domains())
+    chunks = _sender_groups(registry)
     out = [Query(family=f, senders=c, subject_any=words, exclude_subject=NOISE_SUBJECT, after=start,
                  extra=NO_PROMOS if f in OFFER_PRONE else (),
                  max_results=PAYMENTS_SAMPLE if f == "payment" else None)
@@ -69,10 +85,27 @@ def full_plan(registry: Registry, today: date, years: int) -> list[Query]:
     return out
 
 
+# Statement first: statement emails with their PDF, searched directly right after the quick scan.
+# A statement proves a credit card exists, and its PDF names the bank, number and product at once.
+# Gmail matches whole words, and "E-Statement" is the words "e statement": Yes Bank writes
+# "YES_BANK_ACE Rupay Credit Card E-Statement", which the first two phrases miss.
+STATEMENT_SUBJECTS = ("credit card statement", "card statement", "card e-statement", "card estatement",
+                      "card monthly statement")  # SBI Card: "IRCTC SBI Platinum Card Monthly Statement"
+STATEMENT_MONTHS = 12  # the cards in use; older and closed cards are left to the full scan
+
+
+def statement_plan(registry: Registry, today: date, months: int = STATEMENT_MONTHS) -> list[Query]:
+    after = today - timedelta(days=30 * months)
+    return [Query(family="statements", senders=g, subject_any=STATEMENT_SUBJECTS, exclude_subject=NOISE_SUBJECT,
+                  after=after, extra=("has:attachment",)) for g in _sender_groups(registry)]
+
+
 def sync_plan(registry: Registry, since: date) -> list[Query]:
-    return [Query(family="sync", senders=c, exclude_subject=NOISE_SUBJECT, after=since - timedelta(days=1),
-                  extra=NO_PROMOS)
-            for c in _chunks(registry.all_domains())]
+    chunks = _sender_groups(registry)
+    return ([Query(family="sync", senders=c, exclude_subject=NOISE_SUBJECT, after=since - timedelta(days=1),
+                   extra=NO_PROMOS) for c in chunks]
+            + [Query(family="sync_offers", senders=c, subject_any=CARD_OFFER_SUBJECT, exclude_subject=NOISE_SUBJECT,
+                     after=since - timedelta(days=1), extra=("category:promotions",)) for c in chunks])
 
 
 # ---------------------------------------------------------------- evidence store
@@ -127,7 +160,6 @@ class ScanStats:
     first_card_s: float | None = None
     left_unread: int = 0
     reopened: int = 0
-    rejected: int = 0  # bank-domain mail read and ignored because it failed Gmail's check
     per_family: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -187,7 +219,7 @@ def scan(gmail: MeteredGmail, registry: Registry, store: EvidenceStore, queries:
     # 2b. emails an earlier job read only as headers (the quick scan never opens emails)
     # but whose header lacked the card number or product: open them now, highest value first.
     if allow_full_reads:
-        upgrade = [i for i in order if i in known and known[i].dkim_pass and not known[i].used_body
+        upgrade = [i for i in order if i in known and not known[i].used_body
                    and needs_body(known[i], full_statements=False)]
         upgrade = upgrade[:gmail.meter.affordable("full")]
         for start in range(0, len(upgrade), 50):
@@ -213,7 +245,7 @@ def scan(gmail: MeteredGmail, registry: Registry, store: EvidenceStore, queries:
         first = [(m, analyze(m, registry, addresses, names)) for m in metas]
         want = []
         if allow_full_reads:
-            want = [m for m, ev in first if ev.dkim_pass and needs_body(ev, full_statements=False)]
+            want = [m for m, ev in first if needs_body(ev, full_statements=False)]
             want = want[:gmail.meter.affordable("full")]
             if want:
                 gmail.fill_bodies(want)
@@ -225,8 +257,7 @@ def scan(gmail: MeteredGmail, registry: Registry, store: EvidenceStore, queries:
                 ev = analyze(m, registry, addresses, names)
             m.body = None  # email text never outlives this loop
             batch.append(ev)
-            if st.first_card_s is None and ev.last4s and ev.dkim_pass and ev.type not in (
-                    T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD):
+            if st.first_card_s is None and ev.last4s and ev.type not in (T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD):
                 st.first_card_s = round(time.monotonic() - t0, 2)
         store.save(batch)
         st.seconds = round(time.monotonic() - t0, 2)
@@ -300,37 +331,14 @@ def learn_number_tokens(text: str, l4s: list[str]) -> dict[str, set[str]]:
     return out
 
 
-def _known_cards(evs) -> dict[tuple[str, str], int]:
-    """Cards named in Gmail-verified bank mail, with how many emails mention each, most first.
-    Numbers seen only in mail that failed Gmail's check are never treated as cards."""
-    from collections import Counter
+def _known_cards(evs) -> dict[tuple[str, str], None]:
     from carddiscovery.models import CARD_EVIDENCE_TYPES
-    counts: Counter = Counter()
+    out: dict[tuple[str, str], None] = {}
     for ev in evs:
-        if ev.bank_id and ev.dkim_pass and ev.type in CARD_EVIDENCE_TYPES:
+        if ev.bank_id and ev.type in CARD_EVIDENCE_TYPES:
             for l4 in ev.last4s:
-                counts[(ev.bank_id, l4)] += 1
-    return dict(counts.most_common())
-
-
-# Gmail refuses requests past a size limit (a 17 KB search failed in the 3:1 test), so the
-# exclusion list is capped: the most-mentioned cards are excluded first; any card left out
-# only costs extra reads, never a wrong result.
-MAX_EXCLUSION_CHARS = 2_500
-MAX_LEARNED_FORMS = 6
-
-
-def exclusion_terms(cards: dict[tuple[str, str], int], tokens: dict[tuple[str, str], set[str]]) -> tuple[str, ...]:
-    out: list[str] = []
-    size = 0
-    for b, l4 in cards:
-        terms = [f"-{t}" for t in number_terms(b, l4, sorted(tokens.get((b, l4), ()))[:MAX_LEARNED_FORMS])]
-        cost = sum(len(t) + 1 for t in terms)
-        if size + cost > MAX_EXCLUSION_CHARS:
-            break
-        out += terms
-        size += cost
-    return tuple(out)
+                out[(ev.bank_id, l4)] = None
+    return out
 
 
 def _months_back(d: date, months: int) -> date:
@@ -351,7 +359,7 @@ def windows(today: date, years: int, schedule: tuple[int, ...] | None = None) ->
 
 
 def window_plan(registry: Registry, after: date, before: date, today: date) -> list[Query]:
-    chunks = _chunks(registry.all_domains())
+    chunks = _sender_groups(registry)
     out = [Query(family=f, senders=c, subject_any=words, exclude_subject=NOISE_SUBJECT, after=after, before=before,
                  extra=NO_PROMOS if f in OFFER_PRONE else (),
                  max_results=PAYMENTS_SAMPLE if f == "payment" else None)
@@ -378,7 +386,7 @@ def combined_window_plan(registry: Registry, after: date, before: date, today: d
     With every known card excluded, little comes back, so per-type searches aren't needed:
       - statements, payments, applications (not filtered by the Promotions tab)
       - onboarding, lifecycle and the catch-all text, outside the Promotions tab"""
-    chunks = _chunks(registry.all_domains())
+    chunks = _sender_groups(registry)
     core = FAMILIES["statement"] + FAMILIES["payment"] + FAMILIES["application"]
     offer_prone = FAMILIES["onboarding"] + FAMILIES["lifecycle"]
     other = ("(subject:(" + " OR ".join(_q(w) for w in offer_prone) + ") OR "
@@ -393,6 +401,8 @@ def combined_window_plan(registry: Registry, after: date, before: date, today: d
     if before > alert_start:
         out += [Query(family="alerts", senders=c, subject_any=SAMPLED_FAMILY_SUBJECTS, exclude_subject=NOISE_SUBJECT,
                       after=max(after, alert_start), before=before, max_results=40) for c in chunks]
+        out += [Query(family="card_offers", senders=c, subject_any=CARD_OFFER_SUBJECT, exclude_subject=NOISE_SUBJECT,
+                      after=max(after, alert_start), before=before, extra=("category:promotions",)) for c in chunks]
     return out
 
 
@@ -408,7 +418,7 @@ class _Reader:
         self.tokens: dict[tuple[str, str], set[str]] = store.number_tokens()
 
     def _learn(self, m, ev) -> None:
-        if ev.bank_id and ev.last4s and ev.dkim_pass:
+        if ev.bank_id and ev.last4s:
             for l4, words in learn_number_tokens(m.text(), ev.last4s).items():
                 self.tokens.setdefault((ev.bank_id, l4), set()).update(words)
 
@@ -419,14 +429,16 @@ class _Reader:
             m.body = None  # email text never outlives this step
             batch.append(ev)
             self.known[ev.message_id] = ev
-            if self.st.first_card_s is None and ev.last4s and ev.dkim_pass and ev.type not in (
-                    T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD):
+            if self.st.first_card_s is None and ev.last4s and ev.type not in (T.PROMOTIONAL, T.OTP,
+                                                                               T.NOT_CREDIT_CARD):
                 self.st.first_card_s = round(time.monotonic() - self.t0, 2)
         self.store.save(batch)
         self.st.seconds = round(time.monotonic() - self.t0, 2)
         self.on_batch(self.st)
 
-    def read(self, ids: list[str]) -> None:
+    def read(self, ids: list[str], full: bool = True) -> None:
+        """Header reads; with full=True, also full reads of emails whose header lacks the
+        number or product. full=False reads subjects and previews only."""
         ids = [i for i in dict.fromkeys(ids) if i not in self.known]
         for start in range(0, len(ids), 50):
             chunk = ids[start:start + 50][:self.g.meter.affordable("metadata")]
@@ -436,15 +448,26 @@ class _Reader:
             metas = self.g.get_metadata(chunk)
             self.st.header_reads += len(metas)
             first = [(m, analyze(m, self.reg, self.addresses, self.names)) for m in metas]
-            want = [m for m, ev in first if ev.dkim_pass and needs_body(ev, full_statements=False)
-                    ][:self.g.meter.affordable("full")]  # never pay 60 units for mail that failed Gmail's check
-            self.st.rejected = getattr(self.st, "rejected", 0) + sum(1 for _, ev in first if ev.bank_id and not ev.dkim_pass)
+            want = [m for m, ev in first if full and needs_body(ev, full_statements=False)
+                    and not self._partial_known(ev)]
+            want = want[:self.g.meter.affordable("full")]
             if want:
                 self.g.fill_bodies(want)
                 self.st.full_reads += len(want)
             wanted = {m.message_id for m in want}
             self._finish([(m, analyze(m, self.reg, self.addresses, self.names) if m.message_id in wanted else ev)
                           for m, ev in first])
+
+    def _partial_known(self, ev) -> bool:
+        """The header shows only the last 2-3 digits ("ending XX87") and exactly one card
+        already found fits them. Axis statements carry no fuller number in the body either,
+        so a 60-unit full read would learn nothing."""
+        if not ev.last_digits or not ev.bank_id:
+            return False
+        fits = {l4 for e in self.known.values() if e.bank_id == ev.bank_id
+                and e.type not in (T.PROMOTIONAL, T.OTP, T.NOT_CREDIT_CARD) for l4 in e.last4s
+                if l4.endswith(ev.last_digits)}
+        return len(fits) == 1
 
     def read_full(self, ids: list[str]) -> None:
         """Open in full (60 units): for emails whose body matters, e.g. the newest statement."""
@@ -458,7 +481,7 @@ class _Reader:
     def reopen_skimmed(self) -> None:
         """Emails the quick scan read as headers only, whose header lacked the number or product."""
         ids = [i for i, ev in self.known.items()
-               if ev.dkim_pass and not ev.used_body and needs_body(ev, full_statements=False)]
+               if not ev.used_body and needs_body(ev, full_statements=False) and not self._partial_known(ev)]
         n = len(ids)
         self.read_full(ids)
         self.st.reopened += n
@@ -490,7 +513,7 @@ def _probe_cards(gmail, registry: Registry, st: ScanStats, r: "_Reader", cards: 
         senders = tuple(registry.banks[bank].domains if bank in registry.banks else ()) + tested
         if not senders:
             continue
-        num = (_number_group(bank, l4, sorted(r.tokens.get((bank, l4), ()))[:MAX_LEARNED_FORMS]),)
+        num = (_number_group(bank, l4, r.tokens.get((bank, l4), ())),)
         rng = dict(after=after, before=before)
         probes += [((bank, l4), Query(family="card_all", senders=senders, extra=num, **rng)),
                    ((bank, l4), Query(family="card_usage", senders=senders, subject_any=USAGE_WORDS, max_results=1,
@@ -521,6 +544,57 @@ def _probe_cards(gmail, registry: Registry, st: ScanStats, r: "_Reader", cards: 
     r.read_full(statements)
 
 
+# ---------------------------------------------------------------- subjects first (CD_SCAN_MODE=subjects)
+
+SUBJECT_SCAN_TEXT = ("credit card", "card statement", "card e-statement", "card estatement")
+SUBJECT_ROUNDS = 6  # rounds per year: each re-searches with the cards found so far excluded
+
+
+def year_windows(today: date, years: int) -> list[tuple[date, date]]:
+    """The last 12 months first, then each year before it, newest first."""
+    end = today + timedelta(days=1)  # Gmail's before: is exclusive
+    out = [(today - timedelta(days=365), end)]
+    for k in range(1, years):
+        out.append((today - timedelta(days=365 * (k + 1)), today - timedelta(days=365 * k)))
+    return out
+
+
+def subject_scan(gmail, registry: Registry, store: EvidenceStore, today: date, years: int, *,
+                 names: list[str], on_batch: Callable[[ScanStats], None] = lambda s: None,
+                 on_window: Callable[[date, int], None] = lambda d, n: None,
+                 after_first_year: Callable[[], None] = lambda: None) -> ScanStats:
+    """Subjects first, one year at a time, newest first: search every bank and app sender for
+    mail mentioning a credit card or a card statement (with or without an attachment, outside
+    the Promotions tab), with every card already found excluded by its number, and read the
+    subjects and previews only (20 units each; no full reads). After the first year,
+    `after_first_year` runs (the statement step: PDFs only for cards found but incomplete);
+    older years are subjects only, and the caller runs the statement step again at the end."""
+    t0 = time.monotonic()
+    st = ScanStats()
+    r = _Reader(gmail, registry, store, names, st, on_batch, t0)
+    for n, (after, before) in enumerate(year_windows(today, years)):
+        for _ in range(SUBJECT_ROUNDS):
+            cards = _known_cards(r.known.values())
+            excl = tuple(f"-{t}" for b, l4 in cards for t in number_terms(b, l4, r.tokens.get((b, l4), ())))
+            plan = [Query(family="credit_card", senders=g, text_any=SUBJECT_SCAN_TEXT, exclude_subject=NOISE_SUBJECT,
+                          after=after, before=before, extra=NO_PROMOS + excl) for g in _sender_groups(registry)]
+            results = _search_all(gmail, st, plan)
+            for fam, ids in results:
+                st.per_family[fam] = st.per_family.get(fam, 0) + len(ids)
+            todo = list(dict.fromkeys(i for _, ids in results for i in ids if i not in r.known))
+            st.listed += len(todo)
+            if not todo:
+                break
+            r.read(todo[:READS_PER_ROUND], full=False)
+            if len(todo) <= READS_PER_ROUND:
+                break
+        on_window(after, len(_known_cards(r.known.values())))
+        if n == 0:
+            after_first_year()
+    st.seconds = round(time.monotonic() - t0, 2)
+    return st
+
+
 def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date, years: int, *,
                     names: list[str], on_batch: Callable[[ScanStats], None] = lambda s: None,
                     on_window: Callable[[date, int], None] = lambda d, n: None) -> ScanStats:
@@ -546,7 +620,7 @@ def card_aware_scan(gmail, registry: Registry, store: EvidenceStore, today: date
         plan = (combined_window_plan if COMBINED_WINDOWS else window_plan)(registry, after, before, today)
         for _ in range(ROUNDS_PER_WINDOW):
             cards = _known_cards(r.known.values())
-            excl = exclusion_terms(cards, r.tokens)
+            excl = tuple(f"-{t}" for b, l4 in cards for t in number_terms(b, l4, r.tokens.get((b, l4), ())))
             results = _search_all(gmail, st, [_replace(q, extra=q.extra + excl) for q in plan])
             n_rounds += 1
             lists = [[i for i in ids if i not in r.known] for _, ids in results]

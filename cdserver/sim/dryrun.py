@@ -22,9 +22,7 @@ from .generate import Mail
 def _meta(m: Mail, to: str, with_body: bool) -> MessageMeta:
     body = tidy(html_to_text(m.html)) if m.html else tidy(m.text)
     auth = ""
-    if m.auth and m.auth.startswith("mx.google.com;"):
-        auth = m.auth
-    elif m.auth:
+    if m.auth:
         verdict, dom = m.auth.split(":", 1)
         auth = f"mx.google.com; dkim={verdict} header.i=@{dom}; dmarc={verdict} header.from={dom}"
     return MessageMeta(message_id=m.key, date=m.when, sender=m.sender, subject=m.subject, snippet=body[:200],
@@ -39,7 +37,6 @@ class LocalBox:
         self.by_key = {m.key: m for m in mails}
         self.to = to
         self.meter = meter
-        self._tok_cache: dict[str, set[str]] = {}
 
     def mailbox(self) -> str:
         return self.to
@@ -48,15 +45,7 @@ class LocalBox:
         self.meter.charge("profile", 2)
         return [self.to]
 
-    def _tokens(self, m: Mail) -> set[str]:
-        t = self._tok_cache.get(m.key)
-        if t is None:
-            t = self._tok_cache[m.key] = set(re.findall(r"[a-z0-9]+", (m.subject + " " + m.text).lower()))
-        return t
-
     def _match(self, m: Mail, q: Query) -> bool:
-        if "SPAM" in m.labels or "TRASH" in m.labels:
-            return False  # Gmail search leaves out Spam and Trash unless asked
         addr = parseaddr(m.sender)[1].lower()
         dom = addr.split("@")[-1]
         if not any(s.lower() == addr or dom == s.lower() or dom.endswith("." + s.lower()) for s in q.senders):
@@ -89,7 +78,7 @@ class LocalBox:
                 continue
             if e.startswith("(") or (e.startswith("-") and ":" not in e):
                 # Gmail matches whole words, case-insensitively ("XX2846" is one word, "2846" another)
-                tokens = tokens or self._tokens(m)
+                tokens = tokens or set(re.findall(r"[a-z0-9]+", (m.subject + " " + m.text).lower()))
                 if e.startswith("("):
                     if not any(t.lower() in tokens for t in e.strip("()").split(" OR ")):
                         return False

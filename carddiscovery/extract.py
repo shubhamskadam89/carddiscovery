@@ -38,17 +38,27 @@ def redact_pans(text: str) -> tuple[str, int]:
 
 
 _MASK = r"[xX*•●·#]"
+# Mask groups with a single space or hyphen between them: "XXXX XXXX XXXX", "xxx-xxxx".
+# Written so a run of mask characters can be split only one way. The earlier form,
+# (?:MASK{2,}[\s-]?)+, tried every split of the run and took minutes on a 40-character
+# "*****" divider line, which hung the workers.
+_MASK_RUN = rf"{_MASK}{{2,}}(?:[\s-]{_MASK}{{2,}})*"
+_GAP = r"\s{0,6}"  # whitespace between words of a phrase, including a line break
 _LAST4_PATTERNS = [
     # XX1234, xxxx xxxx xxxx 1234, **** 1234, 4XXXXXXXXXXX1234, 5xxx-xxxx-xxxx-1234
-    re.compile(rf"(?<![\w])\d{{0,6}}(?:{_MASK}{{2,}}[\s-]?)+(\d{{4}})(?!\d)"),
+    # Starts only where a run starts (not inside "*****"), so a long run is scanned once.
+    re.compile(rf"(?<![\w*•●·#])\d{{0,6}}{_MASK_RUN}[\s-]?(\d{{4}})(?!\d)"),
     # ending 1234 / ending with 1234 / ending in XX1234 / ends with 1234
+    # Gaps are capped ({_GAP}): several open-ended \s* in a row tried every split of a long
+    # blank run after "ending" and never finished.
     re.compile(
-        rf"\bend(?:ing|s)\s*(?:with|in)?\s*(?:no\.?|number|digits)?\s*[:\-]?\s*{_MASK}*\s*\d?(\d{{4}})(?!\d)",
+        rf"\bend(?:ing|s){_GAP}(?:with|in)?{_GAP}(?:no\.?|number|digits)?{_GAP}[:\-]?{_GAP}{_MASK}*{_GAP}"
+        rf"\d?(\d{{4}})(?!\d)",
         re.IGNORECASE,
     ),
     # last 4 digits 1234 / last four digits: 1234
-    re.compile(r"\blast\s*(?:4|four)\s*digits?\s*(?:of\s+\w+\s+)?(?:are|is)?\s*[:\-]?\s*(\d{4})(?!\d)",
-               re.IGNORECASE),
+    re.compile(rf"\blast{_GAP}(?:4|four){_GAP}digits?{_GAP}(?:of\s+\w+\s+)?(?:are|is)?{_GAP}[:\-]?{_GAP}"
+               r"(\d{4})(?!\d)", re.IGNORECASE),
 ]
 
 
@@ -56,10 +66,39 @@ _LAST4_PATTERNS = [
 # ("Savings A/c XX7788", "linked account number XXXXXX4455"). "Account ending"
 # alone is kept: Amex calls its cards accounts.
 _ACCOUNT_BEFORE = re.compile(
-    r"(?:\ba/c|\bacct\.?|\baccount\s+(?:no\.?|number)|\b(?:savings|current|salary|linked|loan)\s+"
+    r"(?:\ba/c|\bacct\.?|\baccount\s+(?:no\.?|number)|\bbank\s+account|\b(?:savings|current|salary|linked|loan)\s+"
     r"(?:a/c|acct|account)\w*(?:\s+(?:no\.?|number))?)\s*[:\-]?\s*$",
     re.IGNORECASE,
 )
+
+
+# "your account XX7785", "HDFC Bank Account ***7785": a number right after the word
+# "account". Banks that also run savings accounts use it for those; card issuers that only
+# issue cards (Amex: "Card account ending 41005") use it for cards, so the caller decides.
+_AFTER_ACCOUNT = re.compile(
+    rf"(?<!card\s)\baccount{_GAP}(?:no\.?|number|ending(?:{_GAP}(?:with|in))?)?{_GAP}[:\-]?{_GAP}\d{{0,6}}"
+    rf"(?:{_MASK_RUN})?[\s-]?(\d{{4}})(?!\d)", re.IGNORECASE)
+
+
+def account_last4s(text: str) -> set[str]:
+    """Last 4 digits written right after "account" ("your account XX7785")."""
+    return {m.group(1) for m in _AFTER_ACCOUNT.finditer(text)}
+
+
+# Masked numbers that aren't a card: an example in instructions ("For example, if your Card
+# number is 'XXXX-XXXX-XXXX-4321', your Date-of-Birth 'XX-XX-1989', your Mobile Number
+# 'XXXXXX3245'": SBI's e-PIN email made three cards out of it), a phone number, a masked date.
+_EXAMPLE_BEFORE = re.compile(r"\b(?:for\s+example|example|e\.g\.|eg:|for\s+instance|sample)\b", re.IGNORECASE)
+_PHONE_BEFORE = re.compile(r"\b(?:mobile|phone|contact|whatsapp)(?:\s+(?:no\.?|number))?\s*(?:is)?\s*[:\-]?\s*['\"]?\s*$",
+                           re.IGNORECASE)
+_MASKED_DATE = re.compile(r"^[xX*]{2}[-/.][xX*]{2}[-/.]\d{4}$")
+
+
+def _not_a_card(text: str, m: re.Match) -> bool:
+    before = text[max(0, m.start() - 40):m.start()]
+    return bool(_ACCOUNT_BEFORE.search(before) or _PHONE_BEFORE.search(before)
+                or _MASKED_DATE.match(m.group(0).strip(" '\""))
+                or _EXAMPLE_BEFORE.search(text[max(0, m.start() - 160):m.start()]))
 
 
 def last4s(text: str) -> list[str]:
@@ -67,7 +106,7 @@ def last4s(text: str) -> list[str]:
     hits: list[tuple[int, str]] = []
     for p in _LAST4_PATTERNS:
         for m in p.finditer(text):
-            if _ACCOUNT_BEFORE.search(text[max(0, m.start() - 40):m.start()]):
+            if _not_a_card(text, m):
                 continue
             hits.append((m.start(1), m.group(1)))
     seen: list[str] = []
@@ -77,12 +116,61 @@ def last4s(text: str) -> list[str]:
     return seen
 
 
+# The leading digits a bank shows before the mask: "4375XXXXXXXX4321", "5xxx-xxxx-xxxx-1234",
+# "4375 XXXX XXXX 4321". The digits must touch the mask, or be a 4-digit group in the
+# 4-4-4-4 layout, so an amount before a masked number ("Rs 500 XX1234") isn't taken.
+_PREFIX_PATTERNS = [
+    re.compile(rf"(?<![\w])(\d{{1,6}}){_MASK_RUN}[\s-]?(\d{{4}})(?!\d)"),
+    re.compile(rf"(?<![\w])(\d{{4}})(?:[\s-]{_MASK}{{4}}){{2}}[\s-](\d{{4}})(?!\d)"),
+]
+
+
+# Some banks show only the last 2 or 3 digits: "Statement ending XX87" (Axis). Only after
+# "ending"/"ends with", or after a long mask, so other short masked numbers don't count.
+_PARTIAL_PATTERNS = [
+    # "e-PIN for your card no. ending 16" (SBI): "card" right before "ending", no mask
+    re.compile(rf"\bcard{_GAP}(?:no\.?|number)?{_GAP}end(?:ing|s){_GAP}(?:with|in)?{_GAP}(\d{{2,3}})(?!\d)",
+               re.IGNORECASE),
+    # "ending XX87" (Axis), "ending with XXXX XXXX XXXX XX72" (SBI Card: groups with spaces)
+    re.compile(rf"\bend(?:ing|s){_GAP}(?:with|in)?{_GAP}{_MASK_RUN}(\d{{2,3}})(?!\d)", re.IGNORECASE),
+    # A long mask, after up to 6 leading digits: HDFC names statement PDFs like this
+    # ("0036XXXXXXXXXX13_17-11-2026_544.pdf": first 4 and last 2 digits of the card).
+    re.compile(rf"(?<![\w*•●·#])\d{{0,6}}{_MASK}{{6,}}(\d{{2,3}})(?!\d)"),
+]
+
+
+def partial_last_digits(text: str) -> str | None:
+    """The last 2-3 digits of a card number when that's all the email shows ("XX87"), if
+    every such mention agrees. Only looked for when no full last 4 digits were found."""
+    found = set()
+    for p in _PARTIAL_PATTERNS:
+        for m in p.finditer(text):
+            if not _not_a_card(text, m):
+                found.add(m.group(1))
+    return found.pop() if len(found) == 1 else None
+
+
+def number_prefixes(text: str) -> dict[str, list[str]]:
+    """Leading digits shown for each masked card number, keyed by its last 4:
+    {"4321": ["4375"]}. Only used to tell apart two cards that end in the same 4 digits."""
+    out: dict[str, set[str]] = {}
+    for p in _PREFIX_PATTERNS:
+        for m in p.finditer(text):
+            if _not_a_card(text, m):
+                continue
+            out.setdefault(m.group(2), set()).add(m.group(1))
+    return {l4: sorted(ps) for l4, ps in out.items()}
+
+
+# The name must be on the greeting's own line: Gmail cuts the preview at "...hotline numbers
+# HSBC Dear", and with the body after it, "Dear\nHSBC" read the bank as the cardholder, which
+# marked every HSBC email as someone else's and hid the card.
 _SALUTATION = re.compile(
-    r"\b(?:dear|hello|hi)\s+(?:(?:mr|mrs|ms|miss|dr)\.?\s+)?([A-Za-z][A-Za-z .']{1,60}?)\s*[,:\n]",
+    r"\b(?:dear|hello|hi)[ \t]+(?:(?:mr|mrs|ms|miss|dr)\.?[ \t]+)?([A-Za-z][A-Za-z .']{1,60}?)[ \t]*[,:\n]",
     re.IGNORECASE,
 )
-_GENERIC_NAMES = {"customer", "cardholder", "card member", "cardmember", "valued customer", "sir", "madam",
-                  "sir/madam", "member", "user"}
+_GENERIC_NAMES = {"customer", "cardholder", "card holder", "card member", "cardmember", "valued customer",
+                  "valued cardholder", "valued member", "sir", "madam", "sir/madam", "member", "user"}
 
 
 def holder_name(text: str) -> str | None:
@@ -90,9 +178,16 @@ def holder_name(text: str) -> str | None:
     if not m:
         return None
     name = " ".join(m.group(1).split())
-    if name.lower() in _GENERIC_NAMES:
+    words = name.lower().split()
+    # "Dear SBI Cardholder", "Dear Credit Cardholder", "Dear Applicant": a role, not a name.
+    if name.lower() in _GENERIC_NAMES or (words and words[-1] in _GENERIC_ROLES):
         return None
     return name
+
+
+_GENERIC_ROLES = {"cardholder", "cardholders", "holder", "customer", "customers", "member", "cardmember",
+                  "applicant", "client", "user", "sir", "madam", "sir/madam", "patron", "subscriber", "team",
+                  "investor", "depositor", "beneficiary"}
 
 
 def name_matches(found: str | None, user_names: list[str]) -> bool | None:

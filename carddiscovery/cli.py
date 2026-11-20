@@ -49,7 +49,8 @@ def _registry(args) -> Registry:
         bundle = rules.load_bundle(Path(args.bundle))
         rules.activate(bundle)
         print(f"Rules bundle {bundle.get('version')} (signature verified)", file=sys.stderr)
-        return Registry.from_banks(bundle["banks"], catalog_csv=catalog, test_senders=test_senders)
+        return Registry.from_banks(bundle["banks"], catalog_csv=catalog, test_senders=test_senders,
+                                   apps_cfg=bundle.get("apps"))
     return Registry.load(catalog_csv=catalog, test_senders=test_senders)
 
 

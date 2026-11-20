@@ -225,3 +225,67 @@ def test_a_card_only_ever_in_someone_elses_name_is_hidden(c, account):
     out = cards.rebuild(c, a, Registry.load())
     shown = {r["last4"] for r in c.execute("SELECT last4 FROM cards WHERE account_id = %s", (a,))}
     assert shown == {"2846"} and out["hidden"] == 1
+
+
+def test_set_aside_emails_are_stored_with_the_cards_and_replaced_on_rebuild(c, account):
+    a = account()
+    store = engine.EvidenceStore(c, a)
+    from carddiscovery.models import Evidence, EvidenceType as ET
+    from cdserver import cards
+    now = datetime.now(timezone.utc)
+    stmt = lambda i, l4: Evidence(message_id=f"s{i}{l4}", date=now - timedelta(days=30 * i), bank_id="axis",
+                                  type=ET.STATEMENT, last4s=[l4], product="ACE", dkim_pass=True)
+    fee = Evidence(message_id="fee", date=now - timedelta(days=5), bank_id="axis", type=ET.ANNUAL_FEE,
+                   product="ACE", dkim_pass=True)  # no number; both ACE cards fit
+    store.save([stmt(1, "1111"), stmt(2, "1111"), stmt(1, "2222"), stmt(2, "2222"), fee])
+    out = cards.rebuild(c, a, Registry.load())
+    rows = c.execute("SELECT message_id, last4, bank_id, type, reason, candidates, used_body FROM set_aside "
+                     "WHERE account_id = %s", (a,)).fetchall()
+    assert out["set_aside"] == 1
+    assert [dict(r) for r in rows] == [{"message_id": "fee", "last4": "", "bank_id": "axis", "type": "annual_fee",
+                                        "reason": "several_cards", "candidates": 2, "used_body": False}]
+    cards.rebuild(c, a, Registry.load())  # replaced, not added to
+    assert c.execute("SELECT count(*) AS n FROM set_aside WHERE account_id = %s", (a,)).fetchone()["n"] == 1
+
+
+def test_disconnect_deletes_everything_derived_from_gmail(c, account):
+    from cdserver import jobs
+    a = account()
+    c.execute("INSERT INTO evidence (account_id, message_id, extractor_version, data) VALUES (%s, 'm1', '5', '{}')",
+              (a,))
+    c.execute("INSERT INTO set_aside (account_id, message_id, bank_id, type, reason, candidates, used_body) "
+              "VALUES (%s, 'm1', 'axis', 'annual_fee', 'several_cards', 2, false)", (a,))
+    # No Gmail connection row, so nothing is sent to Google.
+    j = jobs.Job(c, {"id": 1, "account_id": a, "kind": "disconnect", "payload": {}}, Registry.load(), None, "w")
+    jobs.disconnect(j)
+    for t in ("evidence", "set_aside"):
+        assert c.execute(f"SELECT count(*) AS n FROM {t} WHERE account_id = %s", (a,)).fetchone()["n"] == 0, t
+
+
+def test_one_stray_name_on_an_otp_does_not_hide_a_card(c, account):
+    # SBI ••2872: 14 emails with no name, one OTP whose name didn't match. It was hidden.
+    a = account()
+    store = engine.EvidenceStore(c, a)
+    from carddiscovery.models import Evidence, EvidenceType as ET
+    from cdserver import cards
+    now = datetime.now(timezone.utc)
+    evs = [Evidence(message_id=f"s{i}", date=now - timedelta(days=30 * i), bank_id="sbi", type=ET.STATEMENT,
+                    last4s=["2872"], product="IRCTC Platinum", dkim_pass=True) for i in range(1, 4)]
+    evs.append(Evidence(message_id="otp", date=now - timedelta(days=3), bank_id="sbi", type=ET.OTP,
+                        last4s=["2872"], dkim_pass=True, name_match=False))
+    store.save(evs)
+    out = cards.rebuild(c, a, Registry.load())
+    assert out["hidden"] == 0
+    assert [r["last4"] for r in c.execute("SELECT last4 FROM cards WHERE account_id = %s", (a,))] == ["2872"]
+
+
+def test_gmail_token_is_stored_as_plain_json_and_read_back():
+    from cdserver.jobs import _token_info
+    assert _token_info(b'{"refresh_token": "r1"}') == {"refresh_token": "r1"}
+
+
+def test_a_token_encrypted_by_an_older_version_asks_to_reconnect(tmp_path):
+    from cdserver.jobs import NeedsReconnect, _token_info
+    old = Vault("api", LocalKms(tmp_path / "k")).seal(b'{"refresh_token": "r1"}', "gmail:1")
+    with pytest.raises(NeedsReconnect):
+        _token_info(old)

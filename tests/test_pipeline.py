@@ -363,9 +363,152 @@ def test_approval_without_number_not_merged_when_ambiguous_30():
                  "Your ACE Credit Card has been approved", days_ago=400)]
     msgs += monthly_statements("axis", "Axis Bank ACE", "1111", 10, 2)
     msgs += monthly_statements("axis", "Axis Bank ACE", "2222", 12, 2)
+    cards, _, ev = run(msgs)
+    # The approval is for one of the two ACE cards; it doesn't show a third, so no
+    # "number unknown" card is made, and it isn't pinned on either one.
+    assert sorted(c.last4 for c in cards) == ["1111", "2222"]
+    approval = ev[0].message_id
+    assert all(approval not in {e.message_id for e in c.evidence} for c in cards)
+
+
+def _regalia_upgraded_to_gold():
+    """Regalia ••1111 (statements 400–550 days ago), upgraded to Regalia Gold ••9999
+    300 days ago, Gold statements 20–170 days ago."""
+    msgs = monthly_statements("hdfc", "HDFC Bank Regalia", "1111", 400, 6)
+    msgs.append(mail("hdfc", "Your card has been upgraded",
+                     "Your Regalia Credit Card ending 1111 has been upgraded to Regalia Gold Credit Card. "
+                     "Your new card ending 9999 will be dispatched.", days_ago=300))
+    msgs += monthly_statements("hdfc", "HDFC Bank Regalia Gold", "9999", 20, 6)
+    return msgs
+
+
+def _unnumbered_fee(days_ago):
+    return mail("hdfc", "Annual fee charged on your HDFC Bank Credit Card",
+                "Annual membership fee has been charged to your credit card.", days_ago=days_ago)
+
+
+def test_unnumbered_mail_after_upgrade_goes_to_the_new_card():
+    # Before: the replaced ••1111 still counted as a second HDFC card, so this became
+    # a "no_identifier" mystery card for review.
+    fee = _unnumbered_fee(50)
+    cards, _, _ = run(_regalia_upgraded_to_gold() + [fee])
+    cs = by_last4(cards)
+    assert set(cs) == {"1111", "9999"}
+    assert fee.message_id in {e.message_id for e in cs["9999"].evidence}
+    assert cs["1111"].status == Status.REPLACED and group(cs["9999"]) == "owned"
+
+
+def test_unnumbered_mail_before_upgrade_goes_to_the_old_card():
+    fee = _unnumbered_fee(450)
+    cards, _, _ = run(_regalia_upgraded_to_gold() + [fee])
+    cs = by_last4(cards)
+    assert set(cs) == {"1111", "9999"}
+    assert fee.message_id in {e.message_id for e in cs["1111"].evidence}
+    assert fee.message_id not in {e.message_id for e in cs["9999"].evidence}
+
+
+def test_product_mail_after_same_product_reissue_goes_to_the_new_card():
+    # Lost-card reissue keeps the product, so "Magnus" matched both numbers: "ambiguous".
+    msgs = monthly_statements("axis", "Axis Bank Magnus", "1111", 200, 3)
+    msgs.append(mail("axis", "Replacement card dispatched",
+                     "Replacement card for card ending 1111 dispatched. New card ending 7777.", days_ago=100))
+    msgs += monthly_statements("axis", "Axis Bank Magnus", "7777", 10, 2)
+    fee = mail("axis", "Annual fee for your Axis Bank Magnus Credit Card",
+               "The annual fee for your Magnus Credit Card has been charged.", days_ago=40)
+    cards, _, _ = run(msgs + [fee])
+    cs = by_last4(cards)
+    assert set(cs) == {"1111", "7777"}
+    assert fee.message_id in {e.message_id for e in cs["7777"].evidence}
+
+
+def test_old_product_name_after_upgrade_still_only_matches_old_card():
+    # Only ••1111 ever held "Regalia". The time limit must not drop it and make a new
+    # mystery Regalia card; behaviour is unchanged from before.
+    late = mail("hdfc", "Annual fee for your HDFC Bank Regalia Credit Card",
+                "The annual fee for your Regalia Credit Card has been charged.", days_ago=60)
+    cards, _, _ = run(_regalia_upgraded_to_gold() + [late])
+    cs = by_last4(cards)
+    assert set(cs) == {"1111", "9999"}
+    assert late.message_id in {e.message_id for e in cs["1111"].evidence}
+
+
+def test_upgrade_does_not_hide_a_genuine_second_card():
+    # A separate Millennia card at the same bank is still a real second candidate, so
+    # the fee can't be pinned on the Gold card. It's set aside, not made a mystery card.
+    fee = _unnumbered_fee(50)
+    msgs = _regalia_upgraded_to_gold() + monthly_statements("hdfc", "HDFC Bank Millennia", "4444", 15, 4)
+    cards, _, _ = run(msgs + [fee])
+    assert sorted(c.last4 for c in cards) == ["1111", "4444", "9999"]
+    assert all(fee.message_id not in {e.message_id for e in c.evidence} for c in cards)
+
+
+def _millennia_since(days_ago):
+    """HDFC Millennia ••1111 with monthly statements, the oldest `days_ago` days ago."""
+    return monthly_statements("hdfc", "HDFC Bank Millennia", "1111", 10, days_ago // 30)
+
+
+def _welcome(days_ago, product="Millennia"):
+    return mail("hdfc", f"Welcome to your HDFC Bank {product} Credit Card",
+                f"Welcome! Your {product} Credit Card is ready to use.", days_ago=days_ago)
+
+
+def test_welcome_near_the_cards_start_joins_it():
+    w = _welcome(400)  # card's first statement ~370 days ago
+    cards, _, _ = run(_millennia_since(390) + [w])
+    assert [c.last4 for c in cards] == ["1111"]
+    assert w.message_id in {e.message_id for e in cards[0].evidence}
+
+
+def test_welcome_long_after_the_only_card_started_is_a_possible_new_card():
+    # Before: silently added to ••1111, hiding a likely second Millennia card (and
+    # making the old card look newly issued).
+    w = _welcome(20)
+    cards, _, _ = run(_millennia_since(390) + [w])
+    cs = by_last4(cards)
+    assert w.message_id not in {e.message_id for e in cs["1111"].evidence}
+    new = cs[None]
+    assert new.product == "Millennia" and "maybe_new" in new.flags and group(new) == "review"
+
+
+def test_late_welcome_without_product_is_a_possible_new_card():
+    w = mail("hdfc", "Welcome to HDFC Bank Credit Cards", "Welcome! Your credit card is ready to use.",
+             days_ago=20)
+    cards, _, _ = run(_millennia_since(390) + [w])
+    new = by_last4(cards)[None]
+    assert {"maybe_new", "no_identifier"} <= new.flags and group(new) == "review"
+
+
+def test_late_non_issuance_mail_still_joins_the_only_card():
+    fee = _unnumbered_fee(20)
+    cards, _, _ = run(_millennia_since(390) + [fee])
+    assert [c.last4 for c in cards] == ["1111"]
+    assert fee.message_id in {e.message_id for e in cards[0].evidence}
+
+
+def test_welcome_goes_to_the_card_it_could_be_for():
+    # Two Millennia cards; the welcome is too late for ••1111 but right for ••2222.
+    w = _welcome(100)
+    msgs = _millennia_since(390) + monthly_statements("hdfc", "HDFC Bank Millennia", "2222", 10, 3)
+    cards, _, _ = run(msgs + [w])
+    cs = by_last4(cards)
+    assert set(cs) == {"1111", "2222"}
+    assert w.message_id in {e.message_id for e in cs["2222"].evidence}
+
+
+def test_unnumbered_mail_joins_the_lone_provisional_card():
+    # Bank with no numbered card: before, this made two review items ("Regalia, number
+    # unknown" and "HDFC card, number unknown") for what is most likely one card.
+    msgs = [_welcome(200, "Regalia"), _unnumbered_fee(100)]
     cards, _, _ = run(msgs)
-    prov = [c for c in cards if c.last4 is None]
-    assert len(prov) == 1 and "ambiguous" in prov[0].flags and group(prov[0]) == "review"
+    assert len(cards) == 1
+    assert cards[0].product == "Regalia" and len(cards[0].evidence) == 2
+
+
+def test_unnumbered_mail_with_two_provisional_cards_is_set_aside():
+    msgs = [_welcome(200, "Regalia"), _welcome(190, "Millennia"), _unnumbered_fee(100)]
+    cards, _, _ = run(msgs)
+    assert sorted(c.product for c in cards) == ["Millennia", "Regalia"]
+    assert all(len(c.evidence) == 1 for c in cards)
 
 
 def test_same_last4_different_banks_31():

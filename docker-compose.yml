@@ -1,0 +1,36 @@
+# One command: docker compose up --build
+# Then open the http://127.0.0.1:8790/?t=... link printed in the log.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: cd
+      POSTGRES_PASSWORD: cd            # local only: the database isn't published outside Docker
+      POSTGRES_DB: carddiscovery
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cd -d carddiscovery"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CD_DATABASE_URL: postgresql://cd:cd@db:5432/carddiscovery
+      CD_BIND: 0.0.0.0
+      CD_HOME: /data                   # master key and server data, kept in the appdata volume
+      CD_GOOGLE_CLIENT: /app/credentials.json
+    ports:
+      - "127.0.0.1:8790:8790"          # this machine only; Google's sign-in returns to this address
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro   # your Google OAuth client (Desktop app); never commit it
+      - appdata:/data
+
+volumes:
+  pgdata:
+  appdata:
