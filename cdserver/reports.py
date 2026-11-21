@@ -295,24 +295,47 @@ def catalog(registry) -> list[dict]:
     return out
 
 
+OTHER = "other"  # the form's "Other (not listed)": the user types the name instead
+
+
+def _typed(name: str | None, what: str) -> str:
+    name = " ".join((name or "").split())
+    if not 2 <= len(name) <= 60 or not re.fullmatch(r"[\w&+.,'()/ -]+", name):
+        raise ValueError(f"type the {what} (2-60 letters, digits or simple punctuation)")
+    return name
+
+
 def correction(c, registry, account_id: int, card_key: str, bank: str, product: str | None, last4: str | None,
-               note: str | None) -> int:
-    """The user says this card is really <bank> <product> ending <last4>: logged with the card's evidence,
-    status open (the team decides; the card shows it as reported meanwhile)."""
-    if bank not in registry.banks:
+               note: str | None, bank_name: str | None = None, product_name: str | None = None) -> int:
+    """The user says this card is really <bank> <product> ending <last4>, picked from the lists or typed
+    in when it isn't listed ("other"). Logged with the card's evidence, status open: the team decides,
+    and the card shows it as reported meanwhile. Typed names are kept as typed, for the team to add."""
+    if bank == OTHER:
+        bank_name, products = _typed(bank_name, "bank name"), set()
+    elif bank in registry.banks:
+        bank_name, products = None, {p for _, p in registry.banks[bank].product_patterns}
+    else:
         raise ValueError("unknown bank")
-    products = {p for _, p in registry.banks[bank].product_patterns}
-    if product and product not in products:
+    if product == OTHER or (bank == OTHER and product_name):
+        product, product_name = None, _typed(product_name, "card name")
+    elif product and product not in products:
         raise ValueError("unknown card for that bank")
+    else:
+        product_name = None
     if last4 and not re.fullmatch(r"\d{4}", last4):
         raise ValueError("last 4 digits must be 4 digits")
     card = c.execute("SELECT bank_id, last4 FROM cards WHERE account_id = %s AND card_key = %s",
                      (account_id, card_key)).fetchone()
     if not card:
         raise ValueError("no such card")
+    correct = {"bank": bank, "product": product or None, "last4": last4 or None}
+    if bank_name:
+        correct["bank_name"] = bank_name
+    if product_name:
+        correct["product_name"] = product_name
     return log(c, account_id, "app", "correction", "open", card_key=card_key, bank_id=card["bank_id"],
                last4=card["last4"], note=note, evidence_ids=card_evidence_ids(c, account_id, card_key),
-               correct={"bank": bank, "product": product or None, "last4": last4 or None})
+               correct=correct)
 
 
 def open_corrections(c, account_id: int) -> dict[str, dict]:

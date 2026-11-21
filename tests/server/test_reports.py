@@ -179,3 +179,19 @@ def test_a_correction_is_logged_with_the_cards_emails_and_shown_on_the_card(c, a
     cards.rebuild(c, a, REG)
     view = c.execute("SELECT view FROM cards WHERE account_id = %s AND card_key = %s", (a, key)).fetchone()["view"]
     assert view["reported_correction"]["product"] == "Diners Club Black"
+
+
+def test_a_bank_or_card_that_isnt_listed_can_be_typed_in(c, account):
+    import pytest
+    a = _setup(c, account)
+    key = c.execute("SELECT card_key FROM cards WHERE account_id = %s AND last4 = '4444'", (a,)).fetchone()["card_key"]
+    reports.correction(c, REG, a, key, "other", None, "4444", None, bank_name="Saraswat Bank", product_name="Platinum")
+    reports.correction(c, REG, a, key, "hdfc", "other", None, None, product_name="Tata Neu Infinity")
+    with pytest.raises(ValueError):
+        reports.correction(c, REG, a, key, "other", None, None, None, bank_name="")   # bank name required
+    with pytest.raises(ValueError):
+        reports.correction(c, REG, a, key, "hdfc", "other", None, None, product_name="<script>")
+    got = [r["correct"] for r in reports.recent(c, account_id=a)]
+    assert {"bank": "hdfc", "product": None, "last4": None, "product_name": "Tata Neu Infinity"} in got
+    assert {"bank": "other", "product": None, "last4": "4444", "bank_name": "Saraswat Bank",
+            "product_name": "Platinum"} in got

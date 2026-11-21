@@ -151,6 +151,7 @@ body.admin.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 1
 .mistake .q { font-weight: 600; }
 .mistake .fld { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; font-size: 14px; }
 .mistake .fld span { color: var(--muted); }
+.mistake .fld[hidden] { display: none; }
 .mistake select, .mistake input { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg); color: var(--ink); font: inherit; }
 .mistake .row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -362,8 +363,8 @@ async function catalog() { if (!CATALOG) CATALOG = (await api("/api/catalog")).b
 function mistakeBits(d, c) {
   if (c.reported_correction) {
     const r = c.reported_correction, bank = (CATALOG || []).find(b => b.id === r.bank);
-    d.append(el("div", "reported", `You reported: ${[bank ? bank.name : r.bank, r.product, r.last4 && "••" + r.last4]
-      .filter(Boolean).join(" ")} — we're checking`));
+    d.append(el("div", "reported", `You reported: ${[r.bank_name || (bank ? bank.name : r.bank), r.product_name || r.product,
+      r.last4 && "••" + r.last4].filter(Boolean).join(" ")} — we're checking`));
   }
   if (!c.key) return;
   const btn = el("button", "mistake-btn", "Report a mistake");
@@ -376,28 +377,44 @@ async function mistakeForm(d, c) {
   const f = el("div", "mistake"); f.addEventListener("click", ev => ev.stopPropagation());
   f.append(el("div", "q", "What's the right card?"));
   const bankSel = el("select"), cardSel = el("select"), last4 = el("input"), note = el("input");
+  const bankName = el("input"), cardName = el("input");
+  bankName.placeholder = "Type the bank's name"; bankName.maxLength = 60;
+  cardName.placeholder = "Type the card's name"; cardName.maxLength = 60;
   bankSel.append(new Option("Choose the bank", ""));
   for (const b of banks) bankSel.append(new Option(b.name, b.id, false, b.id === c.bank));
+  bankSel.append(new Option("Other (not listed)", "other"));
+  const lab = (t, x) => { const w = el("label", "fld"); w.append(el("span", null, t), x); return w; };
+  const bankNameRow = lab("Bank name", bankName), cardRow = lab("Card", cardSel), cardNameRow = lab("Card name", cardName);
   function fillCards() {
-    cardSel.textContent = ""; const b = banks.find(x => x.id === bankSel.value);
+    const other = bankSel.value === "other", b = banks.find(x => x.id === bankSel.value);
+    bankNameRow.hidden = !other;
+    cardSel.textContent = "";
     cardSel.append(new Option(b ? "Choose the card" : "Choose a bank first", ""));
     for (const p of (b ? b.products : [])) cardSel.append(new Option(p, p, false, p === c.product));
-    if (b) cardSel.append(new Option("Other / not listed", ""));
+    if (b) cardSel.append(new Option("Other / not listed", "other"));
     cardSel.disabled = !b;
+    cardRow.hidden = other;                 // an unlisted bank has no card list: just type the card
+    toggleCardName();
   }
-  bankSel.onchange = fillCards; fillCards();
+  function toggleCardName() { cardNameRow.hidden = !(bankSel.value === "other" || cardSel.value === "other"); }
+  bankSel.onchange = fillCards; cardSel.onchange = toggleCardName;
   last4.placeholder = "Last 4 digits"; last4.inputMode = "numeric"; last4.maxLength = 4; last4.value = c.last4 || "";
   note.placeholder = "Anything else? (optional)";
-  const lab = (t, x) => { const w = el("label", "fld"); w.append(el("span", null, t), x); return w; };
-  f.append(lab("Bank", bankSel), lab("Card", cardSel), lab("Last 4 digits", last4), lab("Note", note));
+  f.append(lab("Bank", bankSel), bankNameRow, cardRow, cardNameRow, lab("Last 4 digits", last4), lab("Note", note));
+  fillCards();
   const err = el("div", "err"); f.append(err);
   const row = el("div", "row");
   const send = el("button", "primary", "Send"), notMine = el("button", null, "Not my card at all"), cancel = el("button", null, "Cancel");
   send.onclick = async () => {
     err.textContent = "";
     if (!bankSel.value) return err.textContent = "Choose the bank.";
+    if (bankSel.value === "other" && bankName.value.trim().length < 2) return err.textContent = "Type the bank's name.";
+    if (cardSel.value === "other" && cardName.value.trim().length < 2) return err.textContent = "Type the card's name.";
     if (last4.value && !/^\d{4}$/.test(last4.value)) return err.textContent = "Last 4 digits: 4 numbers.";
-    await sendMistake({ key: c.key, bank: bankSel.value, product: cardSel.value || null, last4: last4.value || null, note: note.value || null });
+    await sendMistake({ key: c.key, bank: bankSel.value, product: cardSel.value || null,
+      bank_name: bankSel.value === "other" ? bankName.value.trim() : null,
+      product_name: !cardNameRow.hidden && cardName.value.trim() ? cardName.value.trim() : null,
+      last4: last4.value || null, note: note.value || null });
   };
   notMine.onclick = async () => { await sendMistake({ key: c.key, not_mine: true, note: note.value || null });
     toast("Removed from your wallet.", "Undo", async () => { await decide(c.key, null); renderHome(); }); };

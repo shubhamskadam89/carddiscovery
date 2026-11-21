@@ -425,7 +425,8 @@ def create_app(registry: Registry, names: list[str]) -> tuple[FastAPI, Api]:
                       "(account_id, card_key) DO UPDATE SET decision = 'no', decided_at = now()", (acc["id"], key))
         else:
             reports.correction(c, registry, acc["id"], key, str(b.get("bank") or ""), b.get("product") or None,
-                               (b.get("last4") or "").strip() or None, b.get("note"))
+                               (b.get("last4") or "").strip() or None, b.get("note"),
+                               bank_name=b.get("bank_name"), product_name=b.get("product_name"))
         cards.rebuild(c, acc["id"], registry)
         return api.status(c, acc)
 
