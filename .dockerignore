@@ -8,3 +8,8 @@
 credentials.json
 token.json
 results*.json
+.env
+.claude
+tests
+docs
+*.command

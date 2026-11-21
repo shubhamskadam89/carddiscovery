@@ -1,0 +1,71 @@
+# On every push and pull request: the full test suite against a real Postgres, then both container
+# images built (backend = the engine, frontend = the test page). Nothing is deployed or pushed anywhere.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      CD_TEST_PG: postgresql://postgres:postgres@localhost:5432
+      CD_TEST_REQUIRE_PG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: OCR tools (statement PDFs)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
+      - name: Install
+        run: pip install -e ".[server,llm,dev]"
+      - name: Tests
+        run: pytest -q -rs
+
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Backend image (the engine)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: card-engine-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Frontend image (test page + nginx)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/frontend/Dockerfile
+          push: false
+          tags: card-engine-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+      - name: Compose file is valid
+        run: POSTGRES_PASSWORD=ci CD_PUBLIC_URL=http://127.0.0.1 docker compose config --quiet

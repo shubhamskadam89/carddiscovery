@@ -85,6 +85,14 @@ def schedule(every_s: float = 30, once: bool = False) -> None:
             (config.SYNC_EVERY_HOURS,)).fetchall()
         for r in due:
             queue.enqueue(c, "daily_sync", r["account_id"])
+        if config.REPORT_INBOX:  # the team's report inbox, every few minutes
+            inbox = c.execute(
+                "SELECT g.account_id FROM gmail_connections g WHERE lower(g.mailbox) = %s AND g.status = 'active' "
+                "AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.account_id = g.account_id AND j.kind = 'report_inbox' "
+                "AND (j.status IN ('queued', 'running') OR j.created_at > now() - make_interval(mins => %s)))",
+                (config.REPORT_INBOX, config.REPORT_EVERY_MIN)).fetchone()
+            if inbox:
+                queue.enqueue(c, "report_inbox", inbox["account_id"])
         if reaped or due:
             print(f"[scheduler] requeued {reaped} stuck jobs, queued {len(due)} daily syncs", flush=True)
         if once:

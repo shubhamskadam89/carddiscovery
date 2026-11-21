@@ -37,12 +37,58 @@ def main() -> None:
     au.add_argument("--account", type=int, required=True)
     au.add_argument("--every", type=int, default=4, help="read every Nth email from known senders")
     au.add_argument("--rate", type=int, default=2000, help="Gmail units per minute (Google allows 6,000)")
+    co = sub.add_parser("corpus", help="development only: study set of an owner's own emails (see cdserver/corpus.py)")
+    co.add_argument("action", choices=["fetch", "label", "review", "report", "model", "blind", "blind-apply",
+                                       "evaluate", "export", "llm", "relabel", "delete"])
+    co.add_argument("--account", type=int, required=True)
+    co.add_argument("--labels", default="auto", choices=["auto", "haiku"],
+                    help="evaluate: train on the rule labels (auto) or on Haiku's relabelling")
+    co.add_argument("--provider", default="ollama", choices=["ollama", "claude", "claude-cli", "claude-cli-haiku"],
+                    help="llm: local Ollama model, or Claude via the Anthropic API (owner's agreement needed)")
+    co.add_argument("--truth", help='JSON: {"cards": {"sbi": {"last4": ["8022"], "products": ["BPCL Octane"]}}}')
     ev = sub.add_parser("evaluate", help="compare a user's cards with the simulated inbox's answer file")
     ev.add_argument("--mailbox", default="shubhamtester183@gmail.com")
     ev.add_argument("--mix", default="synthetic", choices=["synthetic", "real"])
     args = p.parse_args()
 
     from . import config, db
+    if args.cmd == "corpus":
+        from . import corpus
+        if args.action == "fetch":
+            print(corpus.fetch(args.account))
+        elif args.action == "delete":
+            print(f"deleted {corpus.Store(args.account).delete()} files")
+        elif args.action == "label":
+            print(corpus.label_all(args.account, args.truth))
+        elif args.action == "review":
+            print(f"{corpus.apply_review(args.account)} of your answers applied")
+        elif args.action == "model":
+            from . import corpus_model
+            corpus.Store(args.account)  # same access check
+            print(corpus_model.study(args.account))
+        elif args.action == "relabel":
+            from . import corpus_llm
+            corpus.Store(args.account)  # same access check
+            print(corpus_llm.relabel(args.account, corpus._truth(args.truth)))
+        elif args.action == "llm":
+            from . import corpus_llm
+            corpus.Store(args.account)  # same access check
+            print(corpus_llm.run(args.account, corpus._truth(args.truth), args.provider))
+        elif args.action in ("blind", "blind-apply", "evaluate", "export"):
+            from . import corpus_eval
+            corpus.Store(args.account)  # same access check
+            if args.action == "blind-apply":
+                print(corpus_eval.blind_apply(args.account))
+            elif args.action == "export":
+                print(corpus_eval.export(args.account, labels=args.labels))
+            else:
+                if args.action == "blind":
+                    print(corpus_eval.blind(args.account, corpus._truth(args.truth)))
+                else:
+                    print(corpus_eval.evaluate(args.account, corpus._truth(args.truth), args.labels))
+        else:
+            print(corpus.report(args.account))
+        return
     if args.cmd == "audit":
         from .audit import run as audit
         print(audit(args.account, args.every, args.rate))
@@ -55,7 +101,7 @@ def main() -> None:
         from .worker import registry
         db.migrate()
         app, api = create_app(registry(), [n.strip() for n in args.name.split(",") if n.strip()])
-        print(f"API: http://127.0.0.1:{config.API_PORT}/?t={api.token}", flush=True)
+        print(f"API: {config.PUBLIC_URL}/?t={api.token}", flush=True)
         uvicorn.run(app, host=config.API_BIND, port=config.API_PORT, log_level="warning")
     elif args.cmd == "worker":
         from .worker import work

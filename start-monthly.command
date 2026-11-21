@@ -17,6 +17,7 @@ export CD_SCAN_MODE=monthly
 export CD_DATABASE_URL="postgresql://shubhamkadam@localhost:5432/carddiscovery"
 export CD_HOME="$MAIN/.local"                       # vault keys shared with the main checkout
 export CD_GOOGLE_CLIENT="$MAIN/credentials.json"    # Google sign-in client
+export CARDDISCOVERY_DEV=1                          # this laptop only: "?user=<name>" test sign-ins
 
 LOG="$(mktemp -t cdserver)"
 "$MAIN/.venv/bin/python" -u -m cdserver dev 2>&1 | tee "$LOG" &

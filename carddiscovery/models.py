@@ -109,6 +109,9 @@ class Evidence:
     # An offer that names the held card with its number ("your HSBC Visa Platinum Credit
     # Card ending with 9719"): its product is the card's, not what's being sold.
     held: bool = False
+    # The learned model's view (evidence_model.shadow): p_rel, p_own, event family, template id.
+    # Shadow only: shown in the dev panel next to the rules, never used to place a card.
+    shadow: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -133,6 +136,7 @@ class Evidence:
             "test": self.test,
             "rules_version": self.rules_version,
             "held": self.held,
+            "shadow": self.shadow,
         }
 
     @classmethod
@@ -159,6 +163,7 @@ class Evidence:
             test=d.get("test", False),
             rules_version=d.get("rules_version"),
             held=d.get("held", False),
+            shadow=d.get("shadow"),
         )
 
 

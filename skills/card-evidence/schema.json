@@ -1,0 +1,110 @@
+{
+  "type": "object",
+  "properties": {
+    "event": {
+      "type": "string",
+      "enum": [
+        "APPLICATION",
+        "APPROVAL",
+        "REJECTION",
+        "DISPATCH_OR_DELIVERY",
+        "ACTIVATION",
+        "PIN",
+        "STATEMENT",
+        "PAYMENT_DUE",
+        "PAYMENT_RECEIVED",
+        "TRANSACTION",
+        "LIMIT_CHANGE",
+        "REWARD",
+        "RENEWAL_OR_FEE",
+        "BLOCK_OR_REPLACE",
+        "CLOSURE",
+        "OFFER_ON_HELD_CARD",
+        "CROSS_SELL",
+        "SECURITY_NOTICE",
+        "SERVICE_NOTICE",
+        "BANK_ACCOUNT",
+        "OTP",
+        "OTHER"
+      ]
+    },
+    "about_credit_card": {
+      "type": "string",
+      "enum": [
+        "SPECIFIC_CARD",
+        "CREDIT_CARDS_GENERAL",
+        "NOT_CREDIT_CARD",
+        "UNKNOWN"
+      ]
+    },
+    "ownership_evidence": {
+      "type": "string",
+      "enum": [
+        "STRONG",
+        "MODERATE",
+        "WEAK",
+        "NONE",
+        "UNKNOWN"
+      ]
+    },
+    "numbers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "digits": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "CREDIT_CARD",
+              "DEBIT_CARD",
+              "BANK_ACCOUNT",
+              "PAYEE_OR_UPI",
+              "CUSTOMER_ID",
+              "EXAMPLE",
+              "OTHER"
+            ]
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "digits",
+          "kind",
+          "quote"
+        ]
+      }
+    },
+    "product": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "product_context": {
+      "type": "string",
+      "enum": [
+        "HELD",
+        "OFFERED",
+        "APPLIED",
+        "MENTIONED",
+        "NONE"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "about_credit_card",
+    "ownership_evidence",
+    "numbers",
+    "product",
+    "product_context",
+    "reason"
+  ]
+}

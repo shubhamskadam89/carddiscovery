@@ -73,6 +73,24 @@ def test_subjects_saying_card_without_credit_are_found(c, account):
     assert ev.bank_id == "sbi" and ev.product == "BPCL Octane"
 
 
+def test_offers_outside_the_promotions_tab_are_not_read(c, account):
+    # Real IndusInd/HDFC mail: offers filed under Updates, with "card" in the subject.
+    box = [_m(51, "Congratulations! Your HDFC Bank Credit Card is eligible for an increased Credit Limit.", "x", 3),
+           _m(52, "Update Your Insurance Nominee for Your HDFC Bank Credit Card", "x", 4),
+           _m(53, "FLAT 50% discount at Starbucks with your HDFC Bank Credit Card", "x", 5),
+           _m(54, "Rs.500 debited via Credit Card **1111", "Credit Card ending 1111", 6),
+           MessageMeta("c1", NOW - timedelta(days=7), "SBI Card <Statements@sbicard.com>",
+                       "Your CASHBACK SBI Card Monthly Statement", "card ending 4321",
+                       auth_results="mx.google.com; dkim=pass header.i=@sbicard.com", body="card ending 4321")]
+    a = account()
+    engine.windowed_subject_scan(MeteredFake(box, Meter(10_000)), REG, engine.EvidenceStore(c, a),
+                                 engine.month_windows(date.today(), 1)[:1], engine.MONTHLY_SUBJECTS, names=[])
+    known = engine.EvidenceStore(c, a).known()
+    assert set(known) == {"m54", "c1"}            # the three offers were never read (20 units each)
+    assert known["c1"].product == "Cashback"     # a card named with an offer word is still read
+    assert "cashback" not in engine.promo_words(REG) and "eligible" in engine.promo_words(REG)
+
+
 def test_a_subject_read_often_is_skipped_then_rechecked(c, account):
     alerts = [_m(100 + d, "Transaction alert on your HDFC Bank credit card", "INR 50 spent", d)
               for d in range(1, 400, 7)]

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from carddiscovery.evidence_model import decide as shadow_decide
 from carddiscovery.explain import emails, explain
 from carddiscovery.registry import Registry
 from carddiscovery.resolve import resolve, resolve_full
@@ -18,7 +19,9 @@ GROUPS = ["owned", "review", "history", "rejected"]
 
 def rebuild(c, account_id: int, registry: Registry) -> dict:
     """Replace the account's gmail cards (and set-aside emails). Returns {"new": [keys], "apps": [...]}."""
-    evs = list(EvidenceStore(c, account_id).known().values())
+    from .reports import wrong_ids
+    wrong = wrong_ids(c, account_id)  # emails the user said aren't about their card: left out
+    evs = [e for e in EvidenceStore(c, account_id).known().values() if e.message_id.split("#")[0] not in wrong]
     res = resolve_full(evs)
     cards, apps = res.cards, res.applications
     score_all(cards, datetime.now(timezone.utc))
@@ -26,6 +29,8 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
                c.execute("SELECT card_key, decision FROM decisions WHERE account_id = %s", (account_id,))}
     before = {r["card_key"] for r in
               c.execute("SELECT card_key FROM cards WHERE account_id = %s AND source = 'gmail'", (account_id,))}
+    from .reports import open_corrections
+    fixes = open_corrections(c, account_id)  # what the user said this card really is, while the team checks
     rows = []
     hidden = 0
     for card in cards:
@@ -40,7 +45,10 @@ def rebuild(c, account_id: int, registry: Registry) -> dict:
                 "decision": card.decision, "bank": card.bank_id, "last4": card.last4, "product": card.product,
                 "group": g, "first_seen": card.first_seen.isoformat() if card.first_seen else None,
                 "last_seen": card.last_seen.isoformat() if card.last_seen else None,
-                "emails": emails(card), "email_count": len(card.evidence)}
+                "emails": emails(card), "email_count": len(card.evidence),
+                "reported_correction": fixes.get(card.decision_key),
+                # The learned model's decision next to the rules' group (dev panel only).
+                "shadow": shadow_decide([e.shadow for e in card.evidence])}
         rows.append((account_id, card.decision_key, card.bank_id, card.last4, card.product, g, json.dumps(view)))
     with c.transaction():
         c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (account_id,))

@@ -615,6 +615,29 @@ REPEAT_SUBJECT_LIMIT = 2
 # OTP emails only ever confirm a card other mail already shows (SBI sends one per purchase), so
 # the month-by-month search leaves them out: about a fifth of a heavy card user's card mail.
 MONTHLY_EXCLUDE = ("otp", "one time password")
+# Offers Gmail files under Updates, not Promotions, so -category:promotions doesn't drop them, and
+# whose subject says "card": 365 of the emails a real 3-year scan read (~7,300 units, ~75 s), none
+# confirming a card. Seen on real mail: "Your IndusInd Bank Credit Card is eligible for an
+# increased Credit Limit" (weekly), "Update Your Insurance Nominee for Your ... Credit Card",
+# "FLAT 50% discount ... with your ... Credit Card", "Shop on Flipkart with easy EMI options on
+# your Credit Card", "Credit Card? Unlock Digital!", "Pinnacle Visa Credit Card - Upgrade Offer".
+# An offer that names the card with its number is still found: the half-card lookup searches every
+# tab. A word that's part of a card's name (SBI "Cashback") is never excluded (promo_words()).
+PROMO_SUBJECT = ("offer", "offers", "discount", "discounts", "voucher", "vouchers", "cashback", "eligible",
+                 "eligibility", "insurance", "nominee", "unlock", "shop", "shopping", "sale", "festive", "festival",
+                 "deal", "deals", "win", "exclusive", "flat", "emi", "partner", "hurry", "celebrate", "gift",
+                 "gifts", "lounge", "dining", "movie", "movies", "travel", "upto", "save", "savings", "enjoy",
+                 "loan", "insta", "limit", "increase", "increased")
+
+
+def promo_words(registry: Registry) -> tuple[str, ...]:
+    """PROMO_SUBJECT minus every word used in a card's name or alias at any bank."""
+    names: set[str] = set()
+    for bank in registry.banks.values():
+        for pattern, product in bank.product_patterns:
+            names.update(w.lower() for w in re.findall(r"[A-Za-z]+", product))
+            names.update(w.lower() for w in re.findall(r"[A-Za-z]{3,}", pattern.pattern))
+    return tuple(w for w in PROMO_SUBJECT if w not in names)
 RECHECK_EVERY = 6
 MAX_SUBJECT_EXCLUSIONS = 15
 # The lifecycle pass after the main scan: dormant and closed cards often send only these.
@@ -652,6 +675,7 @@ def windowed_subject_scan(gmail, registry: Registry, store: EvidenceStore,
     t0 = time.monotonic()
     st = ScanStats()
     r = _Reader(gmail, registry, store, names, st, on_batch, t0)
+    promos = promo_words(registry)
     for w, (after, before) in enumerate(windows):
         for _ in range(SUBJECT_ROUNDS):
             cards = _known_cards(r.known.values())
@@ -660,7 +684,7 @@ def windowed_subject_scan(gmail, registry: Registry, store: EvidenceStore,
                 s for s, n in sorted(r.subjects.items(), key=lambda x: -x[1])
                 if n >= REPEAT_SUBJECT_LIMIT)[:MAX_SUBJECT_EXCLUSIONS]
             st.per_family["subjects_skipped"] = len(repeats)
-            skip = NOISE_SUBJECT + (MONTHLY_EXCLUDE if family == "monthly" else ()) + repeats
+            skip = NOISE_SUBJECT + (MONTHLY_EXCLUDE if family == "monthly" else ()) + promos + repeats
             plan = [Query(family=family, senders=g, subject_any=subjects, exclude_subject=skip,
                           after=after, before=before, extra=NO_PROMOS + excl) for g in _sender_groups(registry)]
             results = _search_all(gmail, st, plan)

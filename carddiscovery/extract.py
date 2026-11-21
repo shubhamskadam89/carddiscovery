@@ -66,10 +66,19 @@ _LAST4_PATTERNS = [
 # ("Savings A/c XX7788", "linked account number XXXXXX4455"). "Account ending"
 # alone is kept: Amex calls its cards accounts.
 _ACCOUNT_BEFORE = re.compile(
-    r"(?:\ba/c|\bacct\.?|\baccount\s+(?:no\.?|number)|\bbank\s+account|\b(?:savings|current|salary|linked|loan)\s+"
-    r"(?:a/c|acct|account)\w*(?:\s+(?:no\.?|number))?)\s*[:\-]?\s*$",
+    r"(?:\b(?:a/c|acct\.?)(?:\s*(?:no\.?|number))?|\baccount\s+(?:no\.?|number)|\bbank\s+account|\b(?:savings|current|salary|linked|loan|nps|pension|deposit|demat|"
+    r"fd|rd|ppf|trading)\s+"
+    r"(?:a/c|acct|account)\w*(?:\s+(?:no\.?|number))?)"
+    # "for account number ending with XXXXXXXX4585" (HDFC payment advice)
+    r"(?:\s+end(?:ing|s)(?:\s+(?:with|in))?)?\s*[:\-]?\s*$",
     re.IGNORECASE,
 )
+# Numbers that belong to someone else or to a debit card. HDFC's RuPay credit card UPI alert:
+# "debited from your RuPay Credit Card (ending 3254) Paid to ******1763": the payee, not a card.
+_PAYEE_BEFORE = re.compile(r"\b(?:paid\s+to|to\s+vpa|beneficiary(?:\s+(?:a/c|account))?|payee|transferred\s+to)"
+                           r"\s*[:\-]?\s*$", re.IGNORECASE)
+_DEBIT_BEFORE = re.compile(r"\bdebit\s+card(?:\s+(?:no\.?|number|ending(?:\s+(?:with|in))?))?\s*[:\-]?\s*$",
+                           re.IGNORECASE)
 
 
 # "your account XX7785", "HDFC Bank Account ***7785": a number right after the word
@@ -104,6 +113,7 @@ _ID_BEFORE = re.compile(
 def _not_a_card(text: str, m: re.Match) -> bool:
     before = text[max(0, m.start() - 40):m.start()]
     return bool(_ACCOUNT_BEFORE.search(before) or _PHONE_BEFORE.search(before) or _ID_BEFORE.search(before)
+                or _PAYEE_BEFORE.search(before) or _DEBIT_BEFORE.search(before)
                 or _MASKED_DATE.match(m.group(0).strip(" '\""))
                 or _EXAMPLE_BEFORE.search(text[max(0, m.start() - 160):m.start()]))
 

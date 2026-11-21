@@ -32,9 +32,9 @@ DEFER_BACKGROUND_ABOVE = 0.90           # of the daily limit
 # keeps to Gmail's 6,000 a minute, so a full scan's round is large enough to finish in one go:
 # a pause only adds a minute (15,000 cost a real 3-year scan a 60 s pause).
 BUDGETS = {"discover_quick": 1_000, "discover_full": 40_000, "daily_sync": 500, "pdf_enrich": 4_000, "statements": 4_000,
-           "token_check": 10, "disconnect": 0}
+           "token_check": 10, "disconnect": 0, "llm_fallback": 6_000, "forwards": 1_500, "report_inbox": 2_000}
 PRIORITY = {"disconnect": 0, "discover_quick": 10, "statements": 15, "discover_full": 20, "daily_sync": 30,
-            "pdf_enrich": 40, "token_check": 50}
+            "pdf_enrich": 40, "token_check": 50, "llm_fallback": 35, "forwards": 12, "report_inbox": 12}
 
 CARD_AWARE_FULL_SCAN = os.environ.get("CD_CARD_AWARE", "1") != "0"  # search known cards' numbers
 # "monthly": month by month subjects, then statements and PDFs of incomplete cards over 6 months,
@@ -54,3 +54,18 @@ SYNC_EVERY_HOURS = 24
 RESUME_DELAY_S = 60
 MAX_ATTEMPTS = 5
 STALE_LOCK_MIN = 10
+
+# The team's report inbox: users forward a bank email we showed wrongly to this address. It is connected
+# like any Gmail account (read-only) but never scanned for cards; the scheduler reads it every few minutes.
+REPORT_INBOX = os.environ.get("CD_REPORT_INBOX", "").strip().lower()
+REPORT_EVERY_MIN = int(os.environ.get("CD_REPORT_EVERY_MIN", "10"))
+
+# Where people reach the app (EC2: e.g. https://cards.example.com). Allowed Host header, cookie
+# security and the Google sign-in return address all follow it; Google's console must list
+# <PUBLIC_URL>/oauth/callback as an authorised redirect URI.
+PUBLIC_URL = os.environ.get("CD_PUBLIC_URL", f"http://127.0.0.1:{API_PORT}").rstrip("/")
+# "?user=<name>" sign-in as any test user: local development only, never on a shared server.
+DEV_LOGIN = os.environ.get("CARDDISCOVERY_DEV") == "1"
+# Who sees the developer panel and may call /api/dev/*: these Gmail addresses (comma-separated), plus
+# everyone in local development. Normal users never see it, and the endpoints answer 404 to them.
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("CD_ADMIN_EMAILS", "").split(",") if e.strip()}

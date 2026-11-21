@@ -419,3 +419,63 @@ def test_icici_statement_file_name_gives_the_product(fname, last4, product):
                     body="Credit Card Statement. Payment due by November 30, 2026", attachment_names=(fname,))
     ev = analyze(m, REG, [], [])
     assert ev.type == T.STATEMENT and ev.last4s == [last4] and ev.product == product
+
+
+# Found in the second study pass (2026-11): numbers the engine took for card endings.
+@pytest.mark.parametrize("text, card", [
+    # HDFC RuPay credit card UPI alert: the masked number after "Paid to" is the payee.
+    ("Rs.250.00 has been debited from your RuPay Credit Card (ending 3254) Paid to ******1763 on 12-10-26.", "3254"),
+    ("Rs.99.00 debited from your RuPay Credit Card (ending 3254) Paid to: ************8444", "3254"),
+    # HDFC payment advice: an account number written as "account number ending with".
+    ("Payment of INR 5,000 on reference No FT2082 for account number ending with XXXXXXXX4585", None),
+    # Kotak NPS contribution: "NPS Account ending with" is a pension account.
+    ("This will reflect in your NPS Account ending with XXXXXXXX6163", None),
+    # Debit cards are never credit cards, wherever they appear.
+    ("Your Axis Bank Debit card for A/c no. XX8466 has been dispatched", None),
+    ("Your renewed Kotak Bank Debit Card ending XX8913 is on its way", None),
+    ("transaction is completed for your Kotak Bank Debit Card XX8263", None),
+])
+def test_payee_account_and_debit_numbers_are_not_cards(text, card):
+    assert extract.last4s(text) == ([card] if card else [])
+
+
+def test_credit_card_numbers_near_those_words_are_still_kept():
+    assert extract.last4s("Payment received for your credit card XX1234, paid to HDFC Bank") == ["1234"]
+    assert extract.last4s("Rs 500 debited from your credit card ending 5511") == ["5511"]
+    assert extract.last4s("Your Card account ending 41005") == ["1005"]  # Amex calls cards accounts
+
+
+def test_approval_emails_alone_do_not_put_a_card_in_the_wallet():
+    # An approval says a card was granted, not that it reached the person: repeats don't add up.
+    approved = [mail("icici", "Congratulations! Your Sapphiro Credit Card is approved",
+                     "Dear Shubham, your ICICI Bank Sapphiro Credit Card has been approved.", days_ago=d)
+                for d in (20, 18, 15)]
+    cards, _, ev = run(approved)
+    [c] = cards
+    assert all(e.type == T.APPROVAL for e in ev) and c.ownership < 0.9
+    assert group(c) == "review"
+    assert any("approval" in s for s in explain(c, REG).concerns)
+
+
+# Patterns the shadow Haiku fallback found in mail the rules left "unknown" (2026-11). Typed from
+# the subject, so the scan also opens them for the card number. Each names *your* card.
+
+
+@pytest.mark.parametrize("sender, subject, snippet, expected", [
+    (KOTAK, "Merchant credit refund alert on your Kotak Credit Card", "Rs 1419 refunded to card xx8687", T.PAYMENT),
+    (KOTAK, "Important Update: Delivery status of your Kotak Bank Credit Card", "Card xx8687", T.DISPATCH_ACTIVATION),
+    (KOTAK, "Generate Your Kotak Credit Card PIN Anytime, Anywhere", "for card xx8687", T.DISPATCH_ACTIVATION),
+    (HSBC, "PIN Reset done for your HSBC Credit Card ending with 3408", "", T.DISPATCH_ACTIVATION),
+    (HSBC, "We have received credits on your HSBC credit card", "ending 3408", T.PAYMENT),
+    (None, "Card Control Setting Confirmation", "your HDFC Bank Credit Card xxxx7091", T.DISPATCH_ACTIVATION),
+])
+def test_haiku_found_patterns_are_typed_by_the_rules(sender, subject, snippet, expected):
+    _, _, [e] = run([mail("hdfc", subject, snippet, **(sender or {}))])
+    assert e.type == expected
+
+
+def test_a_pin_reset_promo_sent_to_everyone_is_still_not_a_card_event():
+    # "Reset your Credit Card PIN through Mobile Banking": no card, no number; Haiku agreed.
+    _, _, [e] = run([mail("hdfc", "Reset your Credit Card PIN through Mobile Banking", "Download the app",
+                          **HSBC)])
+    assert e.type != T.DISPATCH_ACTIVATION

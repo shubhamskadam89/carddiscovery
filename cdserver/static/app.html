@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>CardWise</title>
+<title>Your cards</title>
 <style>
 :root {
   --desk: #e9ecf1; --desk2: #d9dee6; --frame: #111214; --frame-edge: #2b2d31;
@@ -23,36 +23,15 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { background: radial-gradient(1200px 700px at 50% 0%, var(--desk2), var(--desk)); color: var(--ink);
-  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-  display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+body { background: var(--soft); color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
 
-/* ---- the device ---- */
-.device { position: relative; width: 390px; height: 844px; border-radius: 58px; background: var(--frame);
-  padding: 12px; box-shadow: var(--shadow), inset 0 0 0 2px var(--frame-edge); margin: 24px; flex: none; }
-.device::before, .device::after { content: ""; position: absolute; background: var(--frame-edge); border-radius: 3px; }
-.device::before { left: -3px; top: 170px; width: 3px; height: 64px; box-shadow: 0 84px 0 var(--frame-edge); }
-.device::after { right: -3px; top: 220px; width: 3px; height: 96px; }
-.screen-glass { position: relative; width: 100%; height: 100%; border-radius: 46px; overflow: hidden;
-  background: var(--bg); display: flex; flex-direction: column; }
-.island { position: absolute; top: 11px; left: 50%; transform: translateX(-50%); width: 120px; height: 34px;
-  background: #000; border-radius: 20px; z-index: 5; }
-.statusbar { height: 54px; flex: none; display: flex; align-items: flex-end; justify-content: space-between;
-  padding: 0 30px 8px 34px; font-weight: 600; font-size: 15px; }
-.statusbar .icons { display: flex; gap: 6px; align-items: center; }
-.home-ind { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 134px; height: 5px;
-  border-radius: 3px; background: var(--ink); opacity: .85; }
-.app { flex: 1; overflow-y: auto; padding: 4px 20px 34px; scrollbar-width: none; }
-.app::-webkit-scrollbar { display: none; }
-@media (max-width: 480px), (max-height: 760px) and (max-width: 480px) {
-  body { display: block; }
-  .device { width: 100%; height: 100vh; height: 100dvh; margin: 0; padding: 0; border-radius: 0; box-shadow: none; }
-  .device::before, .device::after, .island, .home-ind { display: none; }
-  .screen-glass { border-radius: 0; }
-  .statusbar { height: env(safe-area-inset-top, 12px); padding: 0; }
-  .statusbar * { display: none; }
-  .app { padding: 16px 16px 28px; }
-}
+/* ---- page: a normal web app, centred column ---- */
+.device { width: 100%; max-width: 760px; margin: 0 auto; min-height: 100vh; background: var(--bg);
+  border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.screen-glass { display: flex; flex-direction: column; min-height: 100vh; }
+.app { flex: 1; padding: 24px 32px 48px; }
+@media (max-width: 600px) { .app { padding: 16px 16px 32px; } .device { border: 0; } }
 
 /* ---- app chrome ---- */
 .screen { display: none; animation: in .18s ease-out; } .screen.on { display: block; }
@@ -143,17 +122,18 @@ label.check input { margin-top: 3px; width: 18px; height: 18px; }
 .state-ico { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; font-size: 30px;
   margin: 60px auto 8px; background: var(--soft); }
 
-/* ---- developer panel: beside the phone on wide screens, a toggle on narrow ones ---- */
-.dev { display: none; }
-.dev-toggle { position: fixed; right: 12px; bottom: 12px; z-index: 20; border: 0; border-radius: 18px;
+/* ---- developer panel (the team only: body.admin): beside the app on wide screens, a toggle on narrow ---- */
+.dev, .dev-toggle { display: none; }
+body.admin .dev-toggle { display: block; }
+body.admin .dev-toggle { position: fixed; right: 12px; bottom: 12px; z-index: 20; border: 0; border-radius: 18px;
   padding: 8px 14px; background: var(--accent); color: var(--accent-ink); font: 600 13px/1 -apple-system, sans-serif;
   cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
-body.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; overflow-y: auto; background: var(--bg);
+body.admin.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; overflow-y: auto; background: var(--bg);
   padding: 16px 18px 60px; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
 @media (min-width: 720px) {
-  .dev-toggle { display: none; }
-  body { padding-right: 330px; }
-  .dev { display: block; position: fixed; top: 0; right: 0; bottom: 0; width: 330px; overflow-y: auto;
+  body.admin .dev-toggle { display: none; }
+  body.admin { padding-right: 330px; }
+  body.admin .dev { display: block; position: fixed; top: 0; right: 0; bottom: 0; width: 330px; overflow-y: auto;
     background: var(--bg); border-left: 1px solid var(--line); padding: 16px 18px 40px;
     font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
 }
@@ -163,6 +143,34 @@ body.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; ove
 .dev .kv { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
 .dev .kv span:first-child { color: var(--muted); }
 .dev .kv span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.mistake-btn { margin-top: 8px; background: none; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px;
+  font-size: 13px; color: var(--muted); cursor: pointer; }
+.mistake-btn:hover { color: var(--ink); border-color: var(--muted); }
+.mistake { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft);
+  display: grid; gap: 8px; }
+.mistake .q { font-weight: 600; }
+.mistake .fld { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; font-size: 14px; }
+.mistake .fld span { color: var(--muted); }
+.mistake select, .mistake input { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink); font: inherit; }
+.mistake .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.mistake .row button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg);
+  color: var(--ink); cursor: pointer; font: inherit; }
+.mistake .row button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.mistake .err { color: var(--bad); font-size: 13px; min-height: 0; }
+.reported { margin-top: 6px; font-size: 13px; color: var(--warn); }
+@media (max-width: 600px) { .mistake .fld { grid-template-columns: 1fr; gap: 4px; } }
+.em-wrong, .em-notmine { background: none; border: 0; color: var(--muted); font-size: 12px; padding: 2px 0; cursor: pointer; text-decoration: underline; }
+.em-notmine { display: block; margin: 4px 0 8px; color: #b45309; }
+.rep-emails { margin: 2px 0 8px 8px; border-left: 2px solid rgba(127,127,127,.3); padding-left: 8px; }
+.rep-email { margin: 6px 0; } .rep-sub { font-weight: 600; } .rep-from, .rep-text { color: var(--muted); font-size: 12px; }
+.em-hint { font-size: 12px; color: var(--muted); margin: 8px 0 4px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.em-hint button { font-size: 12px; }
+.fwd .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.fwd-addr { font-size: 13px; padding: 4px 6px; border-radius: 6px; background: rgba(127,127,127,.15); word-break: break-all; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222; color: #fff; padding: 10px 14px; border-radius: 10px; display: flex; gap: 12px; align-items: center; z-index: 50; font-size: 14px; }
+.toast button { background: none; border: 0; color: #93c5fd; font-weight: 600; cursor: pointer; }
+.dev .kv.differ span:last-child { color: #b45309; font-weight: 600; }
 .dev .bar { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
 .dev .bar i { display: block; height: 100%; background: var(--accent); }
 .dev .steps { display: flex; gap: 6px; margin-bottom: 8px; }
@@ -184,18 +192,11 @@ body.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; ove
 <body>
 <div class="device">
   <div class="screen-glass">
-    <div class="island"></div>
-    <div class="statusbar"><span id="clock">9:41</span>
-      <span class="icons">
-        <svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor" aria-hidden="true"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>
-        <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><path d="M8 2.5c2.4 0 4.6.9 6.2 2.5l1.3-1.4A10.6 10.6 0 0 0 8 .5 10.6 10.6 0 0 0 .5 3.6L1.8 5A8.6 8.6 0 0 1 8 2.5Zm0 4c1.3 0 2.5.5 3.4 1.4l1.4-1.4A6.8 6.8 0 0 0 8 4.5c-1.8 0-3.5.7-4.8 2l1.4 1.4c.9-.9 2.1-1.4 3.4-1.4Zm0 4 2-2a2.8 2.8 0 0 0-4 0l2 2Z"/></svg>
-        <svg width="27" height="13" viewBox="0 0 27 13" aria-hidden="true"><rect x=".5" y=".5" width="23" height="12" rx="3.5" fill="none" stroke="currentColor" opacity=".45"/><rect x="2" y="2" width="18" height="9" rx="2" fill="currentColor"/><rect x="24.5" y="4.5" width="2" height="4" rx="1" fill="currentColor" opacity=".45"/></svg>
-      </span></div>
     <main class="app" id="app">
 
       <!-- 3. home -->
       <section id="s-home" class="screen">
-        <div class="topbar"><div class="brand"><div class="logo">◆</div>CardWise</div>
+        <div class="topbar"><div class="brand"><div class="logo">◆</div>Your cards</div>
           <button class="iconbtn" data-go="s-settings" aria-label="Settings">⚙</button></div>
         <h1 id="home-title">Your wallet</h1>
         <div class="hero"><div class="big" id="home-count">0</div><div id="home-count-l">cards in your wallet</div></div>
@@ -226,7 +227,7 @@ body.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; ove
             We keep your date of birth encrypted and use it only to open them.</p>
           <input id="dob" class="textin" type="date" aria-label="Date of birth" max="2010-12-31">
         </div>
-        <label class="check"><input type="checkbox" id="agree"><span>I let CardWise read emails from the banks above to find my cards.
+        <label class="check"><input type="checkbox" id="agree"><span>I let this app read emails from the banks above to find my cards.
           I can disconnect and delete everything any time.</span></label>
         <p class="small muted">Next, Google asks you to allow read access to Gmail. That's the only permission Gmail
           offers; we use it only as described here. Google handles your Google password and verification.</p>
@@ -291,19 +292,34 @@ body.dev-open .dev { display: block; position: fixed; inset: 0; z-index: 10; ove
       </section>
 
     </main>
-    <div class="home-ind"></div>
   </div>
 </div>
 <button class="dev-toggle" id="dev-toggle" type="button">Dev stats</button>
 <aside class="dev" id="dev" aria-label="Developer stats"><h3>Developer stats</h3><div class="muted">Loading…</div></aside>
 <script>
 "use strict";
-const TOKEN = "__TOKEN__";
-const DEFAULT_NAME = __NAMES__;
+// The team's access token comes in the link (?t=...); kept for this tab so links inside the app work.
+const TOKEN = (() => {
+  const t = new URLSearchParams(location.search).get("t");
+  try { if (t) sessionStorage.setItem("cd_t", t); return t || sessionStorage.getItem("cd_t") || ""; }
+  catch (e) { return t || ""; }
+})();
+let DEFAULT_NAME = "";
 let years = 3, polling = null, me = null, lastResult = null;
-// Login is another service; in this dev build we sign in as a fixed test user.
-const DEV_USER = "dev-user-1";
-async function signIn() { me = await api("/api/dev/login", { user: DEV_USER }); return me; }
+// Each browser has its own account (a cookie): new visitors start empty, and connecting Gmail
+// signs them in as themselves (Google shows whose mailbox it is). Local development only:
+// "?user=nikhil" signs in as that test user instead, remembered for this browser.
+let DEV_LOGIN = false, DEV_USER = null;  // set from /api/config at start
+function devUser() {
+  if (!DEV_LOGIN) return null;
+  const asked = new URLSearchParams(location.search).get("user");
+  try { if (asked) localStorage.setItem("cd_dev_user", asked); return asked || localStorage.getItem("cd_dev_user"); }
+  catch (e) { return asked; }
+}
+async function signIn() {
+  me = DEV_USER ? await api("/api/dev/login", { user: DEV_USER }) : await api("/api/session", {});
+  return me;
+}
 
 const $ = (id) => document.getElementById(id);
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls;
@@ -319,20 +335,11 @@ async function api(path, body) {
 function show(id) { document.querySelectorAll(".screen").forEach(s => s.classList.toggle("on", s.id === id));
   $("app").scrollTop = 0; if (id === "s-settings") renderSettings(); if (id === "s-home") renderHome(); }
 document.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
-function tick() { const d = new Date(); $("clock").textContent = d.getHours() % 12 || 12; $("clock").textContent += ":" + String(d.getMinutes()).padStart(2, "0"); }
-tick(); setInterval(tick, 15000);
-// Scale the phone to fit the window, like a device preview (skipped when full-screen on a real phone).
-function fitDevice() {
-  const d = document.querySelector(".device");
-  if (innerWidth <= 480) { d.style.zoom = ""; return; }
-  const side = innerWidth >= 720 ? 330 : 0;  // the developer panel
-  d.style.zoom = Math.min(1, (innerHeight - 32) / 868, (innerWidth - side - 32) / 414).toFixed(3);
-}
-fitDevice(); addEventListener("resize", fitDevice);
 
 // ---- 3. home
 async function renderHome() {
   try { me = await api("/api/me"); } catch (e) { if (e.status !== 401) return; await signIn(); }
+  if (me && DEV_USER && me.user !== DEV_USER) await signIn();
   $("home-title").textContent = "Your wallet";
   let saved = { groups: { owned: [] } };
   try { saved = await api("/api/cards"); } catch (e) {}
@@ -344,11 +351,64 @@ async function renderHome() {
   const review = (saved.groups.review || []).length;
   if (review) { const b = el("button", "btn ghost", `${review} card${review > 1 ? "s" : ""} to confirm`);
     b.onclick = openResults; box.append(b); }
+  const rb = reportBox(); if (rb) box.append(rb);
   $("home-find").textContent = me.connected ? "Scan Gmail again" : "Find my cards from Gmail";
 }
 function mini(c) { const d = el("div", "card tap"); const t = el("div", "top");
   t.append(el("div", "title", c.title), el("span", "chip " + (CHIP[c.status] || ""), c.status)); d.append(t);
-  attachEmails(d, c); return d; }
+  mistakeBits(d, c); attachEmails(d, c); return d; }
+let CATALOG = null;
+async function catalog() { if (!CATALOG) CATALOG = (await api("/api/catalog")).banks; return CATALOG; }
+function mistakeBits(d, c) {
+  if (c.reported_correction) {
+    const r = c.reported_correction, bank = (CATALOG || []).find(b => b.id === r.bank);
+    d.append(el("div", "reported", `You reported: ${[bank ? bank.name : r.bank, r.product, r.last4 && "••" + r.last4]
+      .filter(Boolean).join(" ")} — we're checking`));
+  }
+  if (!c.key) return;
+  const btn = el("button", "mistake-btn", "Report a mistake");
+  btn.onclick = (ev) => { ev.stopPropagation(); const open = d.querySelector(".mistake");
+    if (open) { open.remove(); return; } mistakeForm(d, c); };
+  d.append(btn);
+}
+async function mistakeForm(d, c) {
+  const banks = await catalog();
+  const f = el("div", "mistake"); f.addEventListener("click", ev => ev.stopPropagation());
+  f.append(el("div", "q", "What's the right card?"));
+  const bankSel = el("select"), cardSel = el("select"), last4 = el("input"), note = el("input");
+  bankSel.append(new Option("Choose the bank", ""));
+  for (const b of banks) bankSel.append(new Option(b.name, b.id, false, b.id === c.bank));
+  function fillCards() {
+    cardSel.textContent = ""; const b = banks.find(x => x.id === bankSel.value);
+    cardSel.append(new Option(b ? "Choose the card" : "Choose a bank first", ""));
+    for (const p of (b ? b.products : [])) cardSel.append(new Option(p, p, false, p === c.product));
+    if (b) cardSel.append(new Option("Other / not listed", ""));
+    cardSel.disabled = !b;
+  }
+  bankSel.onchange = fillCards; fillCards();
+  last4.placeholder = "Last 4 digits"; last4.inputMode = "numeric"; last4.maxLength = 4; last4.value = c.last4 || "";
+  note.placeholder = "Anything else? (optional)";
+  const lab = (t, x) => { const w = el("label", "fld"); w.append(el("span", null, t), x); return w; };
+  f.append(lab("Bank", bankSel), lab("Card", cardSel), lab("Last 4 digits", last4), lab("Note", note));
+  const err = el("div", "err"); f.append(err);
+  const row = el("div", "row");
+  const send = el("button", "primary", "Send"), notMine = el("button", null, "Not my card at all"), cancel = el("button", null, "Cancel");
+  send.onclick = async () => {
+    err.textContent = "";
+    if (!bankSel.value) return err.textContent = "Choose the bank.";
+    if (last4.value && !/^\d{4}$/.test(last4.value)) return err.textContent = "Last 4 digits: 4 numbers.";
+    await sendMistake({ key: c.key, bank: bankSel.value, product: cardSel.value || null, last4: last4.value || null, note: note.value || null });
+  };
+  notMine.onclick = async () => { await sendMistake({ key: c.key, not_mine: true, note: note.value || null });
+    toast("Removed from your wallet.", "Undo", async () => { await decide(c.key, null); renderHome(); }); };
+  cancel.onclick = () => f.remove();
+  row.append(send, notMine, cancel); f.append(row); d.append(f); bankSel.focus();
+}
+async function sendMistake(body) {
+  try { const d = await api("/api/report_mistake", body); if (d.result) { lastResult = d.result; render(d.result); } renderHome();
+    if (!body.not_mine) toast("Thanks — we'll check it.");
+  } catch (e) { alert(e.message); }
+}
 // Tap a card: the emails it was found in (date, kind, what each showed), newest first, each
 // opening in Gmail. No subjects: email text is never stored; Gmail shows it when opened.
 const fmtDate = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
@@ -368,8 +428,8 @@ function attachEmails(d, c) {
     c.emails.forEach((m, i) => {
       const row = el("div", "em");
       if (i >= FIRST) row.hidden = true;
-      const what = [m.kind, m.showed, m.via ? "via " + m.via.toUpperCase() : null, m.forwarded ? "forwarded" : null]
-        .filter(Boolean).join(" · ");
+      const what = [m.kind, m.showed, m.via ? "via " + m.via.toUpperCase() : null,
+                    m.forwarded ? "forwarded" : null].filter(Boolean).join(" · ");
       row.append(el("span", "em-d", fmtDate(m.date)), el("span", "em-k", what));
       const a = el("a", "em-a", "Open in Gmail");
       a.href = `https://mail.google.com/mail/?authuser=${encodeURIComponent(mailbox)}#all/${encodeURIComponent(m.id)}`;
@@ -392,7 +452,6 @@ function attachEmails(d, c) {
 $("home-find").addEventListener("click", () => me && me.connected ? rescan() : show("s-consent"));
 
 // ---- 4. consent → Google
-$("name").value = DEFAULT_NAME || "";
 $("agree").addEventListener("change", () => { $("go-google").disabled = !$("agree").checked; });
 $("years").addEventListener("click", (e) => { const y = e.target.dataset.y; if (!y) return; years = +y;
   [...$("years").children].forEach(b => b.classList.toggle("on", b === e.target)); });
@@ -427,6 +486,7 @@ function cardEl(c) {
   d.append(top, el("div", "why", c.headline));
   if (c.evidence) d.append(el("div", "ev", "Seen in: " + c.evidence.join(" · ")));
   (c.concerns || []).forEach(t => d.append(el("div", "concern", "⚠ " + t)));
+  mistakeBits(d, c);
   if (c.question) {
     const ask = el("div", "ask"); ask.append(el("div", "q", c.question)); const row = el("div", "row");
     const yes = el("button", null, "Yes, it's mine"), no = el("button", null, "No");
@@ -450,8 +510,34 @@ function render(r) {
     `${a.bank} ${a.product || "credit card"}: application ${a.status === "rejected" ? "not approved" : "in progress"}`)));
   $("stats").textContent = r.stats ? `Read ${r.stats.emails_read} bank emails (${r.stats.full_emails} opened in full) in ${r.stats.seconds}s.` : "";
 }
-async function decide(key, answer) {
-  try { const d = await api("/api/decide", { key, answer }); if (d.result) { lastResult = d.result; render(d.result); } }
+async function reportEmail(id, wrong, note) {
+  try {
+    const d = await api("/api/report_email", { id, wrong, note: note || null });
+    if (d.result) { lastResult = d.result; render(d.result); }
+    renderHome();
+    if (wrong) toast("We won't use that email for this card.", "Undo", () => reportEmail(id, false));
+  } catch (e) { alert(e.message); }
+}
+function toast(text, action, onAction) {
+  document.querySelectorAll(".toast").forEach(t => t.remove());
+  const t = el("div", "toast"); t.append(el("span", null, text));
+  if (action) { const b = el("button", null, action); b.onclick = () => { t.remove(); onAction(); }; t.append(b); }
+  document.body.append(t); setTimeout(() => t.remove(), 8000);
+}
+function copyBtn(text) {
+  const b = el("button", null, "Copy");
+  b.onclick = async (ev) => { ev.stopPropagation(); try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; } catch (e) {} };
+  return b;
+}
+function reportBox() {
+  if (!me || !me.connected) return null;
+  const d = el("div", "card fwd");
+  d.append(el("div", "title", "Found a mistake?"),
+           el("div", "why", "Use \u201cReport a mistake\u201d on the card: pick the right bank and card, or say it isn't yours. We look at the emails behind it ourselves."));
+  return d;
+}
+async function decide(key, answer, note) {
+  try { const d = await api("/api/decide", { key, answer, note: note || null }); if (d.result) { lastResult = d.result; render(d.result); } }
   catch (e) { alert(e.message); }
 }
 async function openResults() {
@@ -464,7 +550,7 @@ $("res-back").addEventListener("click", () => show("s-home"));
 // ---- 8. settings
 async function renderSettings() {
   try { me = await api("/api/me"); } catch (e) { await signIn(); }
-  $("set-phone").textContent = me.user; $("set-gmail").textContent = me.mailbox || "Not connected";
+  $("set-phone").textContent = DEV_USER ? me.user : (me.mailbox || "Not signed in yet"); $("set-gmail").textContent = me.mailbox || "Not connected";
   $("set-cards").textContent = me.saved_cards; $("set-msg").textContent = "";
   $("set-disconnect").disabled = !me.connected && !me.mailbox; $("set-rescan").disabled = !me.connected;
 }
@@ -483,12 +569,15 @@ $("set-delete").addEventListener("click", async () => {
 
 // ---- start: route by session and by what Google's redirect told us
 (async function start() {
-  api("/api/config").then(d => {
-    $("bank-count").textContent = `Banks we read (${d.banks.length})`;
-    d.banks.forEach(n => $("bank-list").appendChild(el("div", null, n)));
-  });
+  const cfg = await api("/api/config").catch(() => ({ banks: [] }));
+  DEV_LOGIN = !!cfg.dev_login; DEV_USER = devUser(); DEFAULT_NAME = cfg.default_name || "";
+  $("name").value = DEFAULT_NAME;
+  $("bank-count").textContent = `Banks we read (${cfg.banks.length})`;
+  cfg.banks.forEach(n => $("bank-list").appendChild(el("div", null, n)));
   const hash = location.hash.slice(1); history.replaceState(null, "", location.pathname + location.search);
   try { me = await api("/api/me"); } catch (e) { await signIn(); }
+  if (me && DEV_USER && me.user !== DEV_USER) await signIn();  // "?user=" asked for another test user
+  document.body.classList.toggle("admin", !!(me && me.admin));  // the developer panel is for the team only
   if (hash === "scanning") return startPolling();
   if (["denied", "noscope", "expired"].includes(hash)) return show("s-" + hash);
   show("s-home");
@@ -501,6 +590,7 @@ const fmtMonth = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefin
 function kv(box, k, v) { const r = el("div", "kv"); r.append(el("span", null, k), el("span", null, String(v))); box.append(r); }
 function h(box, t) { box.append(el("h3", null, t)); }
 async function devTick() {
+  if (!document.body.classList.contains("admin")) return;
   const box = $("dev"); if (getComputedStyle(box).display === "none") return;
   let d; try { d = await api("/api/dev/live"); } catch (e) { return; }
   box.textContent = "";
@@ -560,6 +650,7 @@ async function devTick() {
     if (Object.keys(s).length) {
       h(box, "Emails (this job)");
       kv(box, "Searches", n(s.searches)); kv(box, "Headers read", n(s.header_reads)); kv(box, "Read in full", n(s.full_reads));
+      if (s.llm_asked) kv(box, "Sent to Haiku", `${n(s.llm_answered)} of ${n(s.llm_asked)} answered · ${n(s.llm_body_reads)} opened for it`);
     }
   }
   h(box, "Statements & PDFs");
@@ -573,6 +664,75 @@ async function devTick() {
   h(box, "Cards");
   for (const [g, v] of Object.entries(d.cards.by_group)) kv(box, g, n(v));
   for (const b of d.cards.owned_by_bank) kv(box, "  " + b.bank_id, n(b.n));
+  const sh = d.shadow;
+  if (sh && sh.model) {
+    h(box, "Shadow model (doesn't change cards)");
+    kv(box, "Model", sh.model); if (sh.status !== "shadow") box.append(el("div", "last", sh.status));
+    kv(box, "Wallet / ask at", `${sh.thresholds.wallet} / ${sh.thresholds.ask}`);
+    kv(box, "Emails scored", n(sh.scored_emails));
+    const scored = sh.cards.filter(x => x.model);
+    if (!scored.length) box.append(el("div", "last", "No card has scored emails yet: start a fresh scan."));
+    else {
+      kv(box, "Agree with rules", `${scored.filter(x => x.agree).length} of ${scored.length}`);
+      for (const x of [...scored].sort((p, q) => p.agree - q.agree)) {
+        const r = el("div", "kv" + (x.agree ? "" : " differ"));
+        r.title = x.events ? Object.entries(x.events).map(([k, v]) => `${k} ${v}`).join(", ") : "";
+        r.append(el("span", null, x.title), el("span", null, `${x.rules} → ${x.model} ${x.confidence}`));
+        box.append(r);
+      }
+    }
+  }
+  const lm = sh && sh.llm;
+  if (lm && (lm.enabled || lm.asked)) {
+    h(box, "Haiku fallback (shadow)");
+    kv(box, "Backend", lm.enabled ? lm.backend : "off for this account");
+    kv(box, "Unknown emails asked", `${n(lm.asked)}${lm.errors ? ` · ${n(lm.errors)} failed` : ""}`);
+    if (lm.numbers_dropped) kv(box, "Numbers rejected (not in email)", n(lm.numbers_dropped));
+    if (!lm.held_cards.length && lm.asked) box.append(el("div", "last", "No held card found in them."));
+    for (const f of lm.held_cards) {
+      const r = el("div", "kv" + (f.known_card ? "" : " differ"));
+      r.append(el("span", null, `${f.bank} ••${f.last4}`),
+               el("span", null, `${f.events.join(", ")} → ${f.known_card ? "confirms card" : "new card?"}`));
+      box.append(r);
+    }
+  }
+  let rep; try { rep = await api("/api/dev/reports"); } catch (e) {}
+  if (rep) {
+    h(box, "User reports (all accounts)");
+    kv(box, "Report inbox", rep.inbox || "not set (CD_REPORT_INBOX)");
+    if (rep.inbox) {
+      const chk = el("button", "dev-go", "Check inbox now");
+      chk.onclick = async () => { chk.disabled = true; try { await api("/api/dev/check_reports", {}); } catch (e) { alert(e.message); } };
+      box.append(chk);
+    }
+    if (!rep.reports.length) box.append(el("div", "last", "No reports yet."));
+    for (const r of rep.reports.slice(0, 15)) {
+      const row = el("div", "kv" + (r.status === "open" ? " differ" : ""));
+      row.title = [r.subject, r.note].filter(Boolean).join(" — ");
+      row.append(el("span", null, `#${r.id} ${r.user || "?"} · ${r.kind.replace(/_/g, " ")}${r.note ? " · “" + r.note + "”" : ""}`),
+                 el("span", null, `${[r.bank_id, r.last4 && "••" + r.last4].filter(Boolean).join(" ")} · ${r.emails} email${r.emails === 1 ? "" : "s"} · ${r.status}`));
+      if (r.emails) {
+        row.style.cursor = "pointer";
+        row.onclick = async () => {
+          const open = row.nextElementSibling && row.nextElementSibling.classList.contains("rep-emails");
+          if (open) { row.nextElementSibling.remove(); return; }
+          const list = el("div", "rep-emails"); list.append(el("div", "last", "Fetching from the user's Gmail…"));
+          row.after(list);
+          try {
+            const d = await api("/api/dev/report_emails", { id: r.id }); list.textContent = "";
+            if (d.total > d.emails.length) list.append(el("div", "last", `Showing ${d.emails.length} of ${d.total}`));
+            for (const m of d.emails) {
+              const e = el("div", "rep-email");
+              e.append(el("div", "rep-sub", `${(m.date || "").slice(0, 10)} · ${m.subject || "(no subject)"}${m.pdf_evidence ? " · PDF" : ""}`),
+                       el("div", "rep-from", m.from || ""), el("div", "rep-text", (m.text || "").slice(0, 400)));
+              list.append(e);
+            }
+          } catch (e) { list.textContent = "Couldn't fetch: " + e.message; }
+        };
+      }
+      box.append(row);
+    }
+  }
   h(box, "Evidence stored");
   const evTotal = Object.values(d.evidence.by_type).reduce((a, b) => a + b, 0);
   kv(box, "Emails kept", n(evTotal));

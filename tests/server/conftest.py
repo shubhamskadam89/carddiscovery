@@ -26,6 +26,8 @@ def _recreate() -> bool:
 @pytest.fixture(scope="session")
 def database():
     if not _recreate():
+        if os.environ.get("CD_TEST_REQUIRE_PG") == "1":  # CI: a missing database is a failure, not a skip
+            pytest.fail(f"Postgres isn't reachable at {BASE}")
         pytest.skip("Postgres isn't running on localhost:5432 (brew services start postgresql@18)")
     from cdserver import db
     db.migrate()

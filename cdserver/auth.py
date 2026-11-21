@@ -35,6 +35,24 @@ def login(c, user_id: str) -> tuple[dict, str]:
     return acc, token
 
 
+def new_session(c, account_id: int) -> str:
+    """A session for an account that already exists (after Google showed who the person is)."""
+    token = secrets.token_urlsafe(32)
+    c.execute("INSERT INTO sessions (token_hash, account_id, expires_at) "
+              "VALUES (%s, %s, now() + make_interval(secs => %s))", (_hash(token), account_id, SESSION_TTL))
+    return token
+
+
+def anonymous(c) -> tuple[dict, str]:
+    """A fresh, empty account for a browser we haven't seen: nobody else's data, until its owner signs in
+    with Google (the Gmail connection) and becomes their own account."""
+    return login(c, "anon-" + secrets.token_hex(8))
+
+
+def is_anonymous(acc: dict) -> bool:
+    return str(acc.get("external_id", "")).startswith("anon-")
+
+
 def session(c, token: str | None) -> dict | None:
     if not token:
         return None

@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.15-2",
+  "version": "2026.11.21-1",
   "min_engine": 1,
   "classify": {
     "credit_only_banks": [
@@ -44,7 +44,7 @@
       },
       {
         "type": "dispatch_activation",
-        "pattern": "dispatch(ed)?\\b|on (its|the) way|\\bdelivered\\b|out for delivery|courier|\\bactivated\\b|activation (is )?(successful|complete)|green pin|pin (has been )?(set|generated|changed)|card is ready|welcome kit"
+        "pattern": "dispatch(ed)?\\b|on (its|the) way|\\bdelivered\\b|out for delivery|courier|\\bactivated\\b|activation (is )?(successful|complete)|green pin|pin (has been )?(set|generated|changed)|card is ready|welcome kit|delivery status of your|pin for your|pin (is|has been) enclosed|pin reset (done|successful|completed)|generate your\\b.{0,30}\\bpin\\b|card control setting"
       },
       {
         "type": "welcome",
@@ -64,7 +64,7 @@
       },
       {
         "type": "payment",
-        "pattern": "payment (received|due|reminder|successful|of (rs|inr))|due date|minimum amount due|total amount due|thank you for (the |your )?payment|bill (is )?(generated|due)"
+        "pattern": "payment (received|due|reminder|successful|of (rs|inr))|due date|minimum amount due|total amount due|thank you for (the |your )?payment|bill (is )?(generated|due)|credit refund|refund (alert|of|was|has been|processed|credited)|refunded to your|received credits? on your|credit balance in your"
       },
       {
         "type": "transaction_alert",

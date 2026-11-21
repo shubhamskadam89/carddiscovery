@@ -1,36 +1,85 @@
-# One command: docker compose up --build
-# Then open the http://127.0.0.1:8790/?t=... link printed in the log.
+# Three separate containers:
+#   db        Postgres. Only the backend talks to it; swap for a managed database later by changing
+#             CD_DATABASE_URL (the backend runs its own migrations on start).
+#   backend   the engine: API + workers + scheduler. Everything the product does lives here.
+#   frontend  a thin test page + nginx. No data, no secrets; it only calls the backend's /api.
+#
+#   cp .env.example .env      # fill it in (never commit .env)
+#   docker compose up -d --build
+#   docker compose logs backend | grep "API:"     # the link to open (with the team's ?t= token)
+#
+# Networks (each container sees only what it needs):
+#   data    internal (no internet, nothing published): db <-> backend. The frontend can't reach the db.
+#   app     internal: frontend <-> backend.
+#   public  the backend's way out (Gmail, Anthropic) and the frontend's published port.
+# Only the frontend is reachable from outside.
+
 services:
   db:
     image: postgres:18
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: cd
-      POSTGRES_PASSWORD: cd            # local only: the database isn't published outside Docker
+      POSTGRES_USER: ${POSTGRES_USER:-cd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: carddiscovery
     volumes:
       - pgdata:/var/lib/postgresql
+    networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cd -d carddiscovery"]
-      interval: 2s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cd} -d carddiscovery"]
+      interval: 3s
       timeout: 3s
       retries: 30
 
-  app:
-    build: .
+  backend:
+    build:
+      context: .
+      args:
+        WITH_CLAUDE_CLI: ${WITH_CLAUDE_CLI:-1}
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      CD_DATABASE_URL: postgresql://cd:cd@db:5432/carddiscovery
+      CD_DATABASE_URL: postgresql://${POSTGRES_USER:-cd}:${POSTGRES_PASSWORD}@db:5432/carddiscovery
       CD_BIND: 0.0.0.0
-      CD_HOME: /data                   # master key and server data, kept in the appdata volume
+      CD_HOME: /data                                   # vault master key + server data (the cdhome volume)
       CD_GOOGLE_CLIENT: /app/credentials.json
-    ports:
-      - "127.0.0.1:8790:8790"          # this machine only; Google's sign-in returns to this address
+      CD_PUBLIC_URL: ${CD_PUBLIC_URL:?set CD_PUBLIC_URL in .env}
+      CD_SCAN_MODE: ${CD_SCAN_MODE:-monthly}
+      CD_REPORT_INBOX: ${CD_REPORT_INBOX:-}
+      CD_ADMIN_EMAILS: ${CD_ADMIN_EMAILS:-}             # who sees the developer panel
+      CD_LLM_FALLBACK: ${CD_LLM_FALLBACK:-off}
+      CD_LLM_ACCOUNTS: ${CD_LLM_ACCOUNTS:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
-      - ./credentials.json:/app/credentials.json:ro   # your Google OAuth client (Desktop app); never commit it
-      - appdata:/data
+      - ${GOOGLE_CLIENT_FILE:-./credentials.json}:/app/credentials.json:ro   # Google OAuth client; never commit it
+      - cdhome:/data
+    networks: [data, app, public]                      # no ports published: only nginx reaches it
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      # - "443:443"                                    # with deploy/nginx/https.conf.example
+    # volumes:
+    #   - /etc/letsencrypt/live/<domain>:/etc/nginx/certs:ro   # with deploy/nginx/https.conf.example
+    networks: [app, public]
+
+networks:
+  data:
+    internal: true
+  app:
+    internal: true
+  public:
 
 volumes:
-  pgdata:
-  appdata:
+  pgdata:     # the database
+  cdhome:     # vault master key (losing it means every user reconnects Gmail), study set, analysis

@@ -19,7 +19,7 @@
 #     [banks.hdfc.families]
 #     "Regalia" = ["Regalia Gold", "Regalia First"]
 #
-# `catalog_issuers`: the CardCircle catalogue issuer slugs (cards.issuer.slug) whose cards are
+# `catalog_issuers`: the card catalogue's issuer slugs (cards.issuer.slug) whose cards are
 #   listed here. Products marked from the catalogue were merged from cards.card on 2026-11-19.
 #   Co-branded SBI Card and OneCard cards sit under the issuer that sends their mail.
 

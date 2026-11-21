@@ -271,6 +271,7 @@ def discover_full(j: Job) -> None:
     j.say(f"Full check done: {r['count']} cards")
     if j.conn["pdf_opt_in"] and config.READ_STATEMENT_PDFS:
         queue.enqueue(j.c, "pdf_enrich", j.account_id)
+    _queue_llm_fallback(j)
 
 
 def daily_sync(j: Job) -> None:
@@ -286,6 +287,7 @@ def daily_sync(j: Job) -> None:
                     (j.account_id, json.dumps({"card_key": key})))
     j.c.execute("UPDATE gmail_connections SET last_synced_at = %s WHERE account_id = %s", (started, j.account_id))
     j.say(f"Synced: {st.header_reads} new bank emails, {len(r['new'])} new cards")
+    _queue_llm_fallback(j)
 
 
 def token_check(j: Job) -> None:
@@ -594,7 +596,7 @@ def disconnect(j: Job) -> None:
         except Exception:
             revoked = False  # the token is deleted regardless
     with j.c.transaction():
-        for t in ("evidence", "statement_facts", "notifications", "decisions", "card_index", "set_aside",
+        for t in ("evidence", "statement_facts", "notifications", "decisions", "email_reports", "card_index", "set_aside",
                   "statement_pdf_reads"):
             j.c.execute(f"DELETE FROM {t} WHERE account_id = %s", (j.account_id,))
         j.c.execute("DELETE FROM cards WHERE account_id = %s AND source = 'gmail'", (j.account_id,))
@@ -604,5 +606,59 @@ def disconnect(j: Job) -> None:
     j.stats = {"revoked": revoked}
 
 
+# ---------------------------------------------------------------- Claude Haiku fallback (shadow)
+
+def _queue_llm_fallback(j: Job) -> None:
+    from . import understanding
+    if understanding.enabled(j.account_id):
+        queue.enqueue(j.c, "llm_fallback", j.account_id)
+
+
+def llm_fallback(j: Job) -> None:
+    """After a scan, outside it, so scans don't wait: the emails the rules typed "unknown" and Haiku
+    hasn't seen are opened in full (60 units each) and sent to Claude Haiku. Its checked answer is
+    stored with the email's evidence (shadow["llm"]); the rules' evidence is left as it was."""
+    from . import understanding
+    if not understanding.enabled(j.account_id):
+        return
+    j.dev["step"] = "haiku"
+    store = EvidenceStore(j.c, j.account_id)
+    todo = sorted((ev for ev in store.known().values()
+                   if understanding.eligible(ev) and not (ev.shadow or {}).get("llm")),
+                  key=lambda e: e.date, reverse=True)  # newest first, if the budget runs out
+    j.say(f"Asking Claude Haiku about {len(todo)} emails the rules couldn't type")
+    asked = answered = 0
+    for start in range(0, len(todo), 50):
+        chunk = todo[start:start + 50][:j.meter.affordable("full")]
+        if not chunk:
+            break
+        metas = {m.message_id: m for m in j.gmail.get_full([e.message_id for e in chunk])}
+        pairs = [(metas[e.message_id], e) for e in chunk if e.message_id in metas]
+        answered += understanding.fallback(pairs, j.registry)
+        for m, _ in pairs:
+            m.body = None  # email text never outlives this step
+        store.save([e for _, e in pairs])
+        asked += len(pairs)
+        j.stats = {"llm_asked": asked, "llm_answered": answered, "llm_body_reads": asked, "full_reads": asked}
+        j.say(f"Haiku answered {answered} of {asked}")
+    j.dev["step"] = "done"
+    j.rebuild()
+
+
+# ---------------------------------------------------------------- the team's report inbox
+
+def report_inbox(j: Job) -> None:
+    """Read the report inbox (this job's account is the inbox itself): forwards from users saying a
+    card or an email we showed is wrong. Logged in user_reports and acted on; see reports.py."""
+    from . import reports
+    if not config.REPORT_INBOX or (j.conn["mailbox"] or "").lower() != config.REPORT_INBOX:
+        return
+    j.dev["step"] = "reports"
+    j.stats = reports.read_inbox(j.gmail, j.registry, j.c, config.REPORT_INBOX)
+    j.say(f"Report inbox: {j.stats['found']} new, {j.stats['applied']} acted on, {j.stats['open']} open")
+    j.dev["step"] = "done"
+
+
 HANDLERS = {"discover_quick": discover_quick, "discover_full": discover_full, "daily_sync": daily_sync,
-            "pdf_enrich": pdf_enrich, "token_check": token_check, "statements": statements}
+            "pdf_enrich": pdf_enrich, "token_check": token_check, "statements": statements,
+            "llm_fallback": llm_fallback, "report_inbox": report_inbox}

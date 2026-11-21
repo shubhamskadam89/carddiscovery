@@ -245,7 +245,7 @@ def analyze(
         if len(named) == 1:
             best, held = named.pop(), True
             products = [best]
-    return Evidence(
+    ev = Evidence(
         message_id=msg.message_id,
         date=msg.date,
         bank_id=bank_id,
@@ -268,6 +268,12 @@ def analyze(
         rules_version=active_version(),
         held=held,
     )
+    try:  # shadow scoring must never break reading an email
+        from .evidence_model import shadow
+        ev.shadow = shadow(msg, ev, registry)
+    except Exception:
+        ev.shadow = None
+    return ev
 
 
 # ICICI names each statement PDF after the card, with a product code where the PDF itself
